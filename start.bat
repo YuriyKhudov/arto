@@ -15,24 +15,38 @@ if /i not "%HERE:\AppData\Local\Temp\=%"=="%HERE%" (
   exit /b 1
 )
 
+rem Node.js: свой из папки runtime, иначе системный
 set "NODE=node"
-if exist "runtime\node.exe" set "NODE=runtime\node.exe"
+set "NPM=npm"
+if exist "runtime\node.exe" set "NODE=%~dp0runtime\node.exe"
+if exist "runtime\npm.cmd" set "NPM=%~dp0runtime\npm.cmd"
+if exist "runtime\node.exe" set "PATH=%~dp0runtime;%PATH%"
 "%NODE%" -v >nul 2>&1
-if errorlevel 1 (
-  echo.
-  echo   Не найден Node.js. Запустите install.bat ещё раз — он всё доустановит.
-  echo.
-  pause
-  exit /b 1
-)
-if not exist "node_modules\@huggingface\transformers" (
-  echo.
-  echo   Не установлены библиотеки программы. Запустите install.bat ещё раз.
-  echo.
-  pause
-  exit /b 1
-)
+if errorlevel 1 goto nonode
 
+rem Библиотеки программы: если их нет — доустанавливаем сами
+if exist "node_modules\@huggingface\transformers\package.json" goto run
+echo.
+echo   Доустанавливаю библиотеки программы — один раз, 1-3 минуты, нужен интернет...
+echo.
+if not exist "data" mkdir "data"
+call "%NPM%" install --omit=dev --ignore-scripts --no-audit --no-fund
+if exist "node_modules\@huggingface\transformers\package.json" goto run
+echo.
+echo   Не получилось установить библиотеки. Проверьте интернет и запустите Arto ещё раз.
+echo   Текст ошибки — выше. Его можно переслать автору программы.
+echo.
+pause
+exit /b 1
+
+:nonode
+echo.
+echo   Не найден Node.js. Запустите install.bat ещё раз — он всё доустановит.
+echo.
+pause
+exit /b 1
+
+:run
 rem Окно Arto откроется само, как только программа будет готова
 start "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0launch.ps1"
 

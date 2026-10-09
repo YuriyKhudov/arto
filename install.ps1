@@ -116,12 +116,19 @@ if (-not (Test-Path $node)) {
   Copy-Item -Recurse -Force "$Root\engine\downloads\node-$ver-win-x64\*" "$Root\runtime"
   Remove-Item -Recurse -Force "$Root\engine\downloads\node-$ver-win-x64", "$Root\engine\downloads\node.zip"
 }
-if (-not (Test-Path "$Root\node_modules\@huggingface\transformers")) {
-  Say "   ставлю библиотеки…"
-  & "$Root\runtime\npm.cmd" install --omit=dev --no-audit --no-fund
+$env:Path = "$Root\runtime;$env:Path"   # npm и его скрипты должны видеть наш Node.js
+New-Item -ItemType Directory -Force "$Root\data" | Out-Null
+$libOk = { Test-Path "$Root\node_modules\@huggingface\transformers\package.json" }
+for ($try = 1; $try -le 3 -and -not (& $libOk); $try++) {
+  Say "   ставлю библиотеки программы (попытка $try)…"
+  $ErrorActionPreference = "Continue"
+  & "$Root\runtime\npm.cmd" install --omit=dev --ignore-scripts --no-audit --no-fund *>&1 | Tee-Object -FilePath "$Root\data\install-npm.log"
+  $ErrorActionPreference = "Stop"
 }
+if (-not (& $libOk)) { throw "Не удалось установить библиотеки программы. Проверьте интернет и запустите install.bat ещё раз. Подробности: data\install-npm.log" }
+Say "   библиотеки на месте" "Green"
 Say "   скачиваю переводчик с русского (110 МБ)…"
-& $node -e "require('./translate').preload().then(()=>console.log('   переводчик готов'))"
+& $node -e "require('./translate').preload().then(t=>{console.log(t?'   переводчик готов':'   переводчик не загрузился — Arto докачает его при первом запуске (нужен интернет)')})"
 
 # ---------- 5. Настройки ----------
 Step "Настройки"

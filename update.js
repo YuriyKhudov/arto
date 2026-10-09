@@ -75,7 +75,7 @@ async function apply(log = console.log) {
   if (fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8') !== oldPkg) {
     log('Обновляю библиотеки…');
     const npm = fs.existsSync(path.join(ROOT, 'runtime', 'npm.cmd')) ? path.join(ROOT, 'runtime', 'npm.cmd') : 'npm.cmd';
-    execFileSync(npm, ['install', '--omit=dev', '--no-audit', '--no-fund'], { cwd: ROOT, stdio: 'inherit', shell: true });
+    execFileSync(npm, ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: ROOT, stdio: 'inherit', shell: true });
   }
   fs.rmSync(tmp, { recursive: true, force: true });
   log(`Готово: Arto обновлён до версии ${info.latest}.`);
