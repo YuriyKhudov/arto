@@ -298,6 +298,15 @@ async function go() {
   const text = $('#prompt').value.trim();
   if (!text) { $('#prompt').focus(); return; }
   if (state.engine.status !== 'ready') return toast(state.engine.message, true);
+  // просят реализм, а выбрана рисовальная техника — предложить «Реализм»
+  if (state.mode === 'draw' && /реалист|фотореал|как фото|realistic|photoreal/i.test(text)
+      && !['realism', 'raw', 'oil'].includes(state.params.style)) {
+    if (confirm(`В запросе есть «реалистичный», а выбрана техника «${styleName(state.params.style)}» — она превратит всё в рисунок.\n\nПереключить на «Реализм»?`)) {
+      state.params.style = 'realism';
+      saveParams();
+      syncControls();
+    }
+  }
   const btn = $('#goBtn');
   btn.disabled = true;
   try {

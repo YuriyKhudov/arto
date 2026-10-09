@@ -38,20 +38,31 @@ const STYLES = [
     core: 'linocut print, carved gouge marks, high contrast black and white, bold graphic shapes, hand-pulled printmaking texture' },
   { id: 'mixed', name: 'Смешанная техника', hint: 'Коллаж, слои, фактура',
     core: 'mixed media sketch, layered collage, graphite and acrylic, torn paper textures, scribbles and drips, experimental art journal page' },
+  { id: 'realism', name: 'Реализм', hint: 'Реалистичная живопись, живая кожа и свет',
+    core: 'realistic oil painting, lifelike natural skin tones, subtle realistic lighting, accurate anatomy and proportions, fine detailed rendering, academic realism, depth of field',
+    drawn: false,
+    negative: 'pencil sketch, drawing, line art, lineart, graphite, charcoal, cartoon, anime, comic, illustration, flat colors, sketchy lines, monochrome, watermark, signature, text, logo, lowres, blurry, deformed, bad anatomy, extra fingers' },
 ];
 
 // stylize — «эстетический слой» в духе Midjourney (накопительно).
 // Признаки фирменного вида MJ: гармоничная ограниченная палитра, кинематографичный свет,
 // атмосферная глубина, выразительная композиция с ясным центром внимания,
 // проработанный фокус и свободные, «растворяющиеся» края, богатая фактура.
+// Общий слой — нейтральный для любой картины (без слов про рисунок, иначе Raw/реализм уходят в карандаш)
 const STYLIZE_TIERS = [
   [25, 'artful composition with a clear focal point'],
-  [75, 'harmonious limited color palette, atmospheric depth, beautiful soft light'],
-  [100, 'detailed focal area dissolving into loose expressive edges, rich tactile texture, elegant negative space'],
-  [200, 'expressive light and shadow, dramatic chiaroscuro, masterful draftsmanship, strong value design'],
-  [350, 'evocative mood, poetic storytelling, painterly sophistication, sketchbook of a master artist'],
-  [550, 'breathtaking artistic vision, museum-quality masterpiece, bold stylization, sublime atmosphere'],
-  [800, 'highly stylized visionary interpretation, lyrical abstraction, dreamlike grandeur'],
+  [75, 'harmonious color palette, atmospheric depth, beautiful soft light'],
+  [100, 'rich detail, tactile textures'],
+  [200, 'expressive light and shadow, dramatic lighting'],
+  [350, 'evocative mood, poetic storytelling, fine art masterpiece'],
+  [550, 'breathtaking artistic vision, museum quality, sublime atmosphere'],
+  [800, 'highly stylized visionary interpretation, dreamlike grandeur'],
+];
+
+// Дополнительный слой только для рисовальных техник (графит, уголь, тушь…)
+const DRAWN_TIERS = [
+  [100, 'detailed focal area dissolving into loose expressive edges, elegant negative space'],
+  [200, 'masterful draftsmanship, strong value design'],
 ];
 
 // chaos: случайные модификаторы для каждого из вариантов
@@ -87,8 +98,10 @@ function buildPrompts({ subject, style = 'graphite', stylize = 100, chaos = 0, w
   // Техника — в начало и с повышенным весом: иначе модели скатываются в фото
   const [medium, ...details] = st.core.split(', ');
   const base = st.core ? [`(${medium}:1.3) of ${subject.trim()}`, details.join(', ')] : [subject.trim()];
+  const drawn = st.core && st.drawn !== false;
   for (const [t, text] of STYLIZE_TIERS) if (stylize >= t) base.push(text);
-  if (st.core) base.push('(hand-drawn traditional artwork:1.2)');
+  if (drawn) for (const [t, text] of DRAWN_TIERS) if (stylize >= t) base.push(text);
+  if (drawn) base.push('(hand-drawn traditional artwork:1.2)');
 
   const prompts = [];
   for (let i = 0; i < count; i++) {
@@ -106,7 +119,8 @@ function buildPrompts({ subject, style = 'graphite', stylize = 100, chaos = 0, w
     prompts.push(parts.filter(Boolean).join(', '));
   }
 
-  const negative = [style === 'raw' ? '' : DEFAULT_NEGATIVE, no].filter((x) => x && x.trim()).join(', ');
+  const baseNeg = style === 'raw' ? '' : st.negative || DEFAULT_NEGATIVE;
+  const negative = [baseNeg, no].filter((x) => x && x.trim()).join(', ');
   return { prompts, negative };
 }
 
