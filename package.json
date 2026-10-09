@@ -8,6 +8,7 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.8.1"
+    "@huggingface/transformers": "^3.8.1",
+    "sharp": "^0.34.5"
   }
 }

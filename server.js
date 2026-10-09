@@ -4,10 +4,22 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+
+// Журнал ошибок запуска: data/server.log — его можно просто переслать при проблемах
+const LOG_FILE = path.join(__dirname, 'data', 'server.log');
+function logError(where, e) {
+  const line = `[${new Date().toISOString()}] ${where}: ${e && e.stack ? e.stack : e}\n`;
+  console.error(line);
+  try { fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true }); fs.appendFileSync(LOG_FILE, line); } catch {}
+}
+process.on('uncaughtException', (e) => { logError('Ошибка', e); process.exit(1); });
+process.on('unhandledRejection', (e) => logError('Ошибка (async)', e));
+
 const { STYLES, buildPrompts, parseInlineParams, dimsFor } = require('./prompt');
 const { Comfy, wfGenerate, wfUpscale, wfEdit } = require('./comfy');
 const { toEnglish, preload: preloadTranslator } = require('./translate');
-const { preserveTexture, blendByMask } = require('./texture');
+// библиотека картинок нужна только для сохранения фактуры — если её нет, остальное работает
+const texture = () => require('./texture');
 
 const PORT = process.env.PORT || 7777;
 const ROOT = __dirname;
@@ -287,7 +299,8 @@ function createUpscale(src, index, mode = 'simple') {
 // ИИ-редактор перерисовывает всю картинку и сглаживает мазок. Берём из правки только изменённые места;
 // при retexture — ещё и «перемазываем» их моделью-художником в манере оригинала (оригинал = образец стиля).
 async function keepTexture(orig, edited, { retexture = false, prompt = '', negative = '', seed = 1, prog } = {}) {
-  const r = await preserveTexture(orig, edited);
+  let r;
+  try { r = await texture().preserveTexture(orig, edited); } catch (e) { logError('Сохранение фактуры', e); return edited; }
   if (r.changed > 0.6) return edited;          // изменилась почти вся картинка (новый стиль, ночь…) — так и задумано
   if (!retexture || r.changed < 0.002) return r.buf;
   const g = edition.generate;
@@ -304,7 +317,7 @@ async function keepTexture(orig, edited, { retexture = false, prompt = '', negat
     styleRefs: st ? [st] : null, styleWeights: [1], styleWeight: 0.8,
     style: st ? { ...sr, ipadapter: await model('ipadapter', sr.ipadapter), clipVision: await model('clip_vision', sr.clipVision) } : null,
   }), { onProgress: prog });
-  return blendByMask(r.buf, re, r.mask, r.W, r.H);
+  return texture().blendByMask(r.buf, re, r.mask, r.W, r.H);
 }
 
 // Изменить по команде (аналог Nano Banana)
