@@ -1,0 +1,58 @@
+{
+  "edition": "pro",
+  "comfy": {
+    "url": "http://127.0.0.1:8188",
+    "path": "",
+    "args": []
+  },
+  "editions": {
+    "pro": {
+      "title": "Pro",
+      "generate": {
+        "ckpt": "DreamShaperXL_Turbo_v2_1.safetensors",
+        "base": 1024,
+        "steps": 8,
+        "cfg": 2,
+        "sampler": "dpmpp_sde",
+        "scheduler": "karras"
+      },
+      "upscale": "RealESRGAN_x2plus.pth",
+      "edit": {
+        "unet": "qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning_comfyui_4steps_v1.0.safetensors",
+        "dtype": "default",
+        "lora": null,
+        "clip": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+        "vae": "qwen_image_vae.safetensors",
+        "steps": 4,
+        "megapixels": 1
+      },
+      "styleRef": {
+        "ipadapter": "ip-adapter-plus_sdxl_vit-h.safetensors",
+        "clipVision": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors",
+        "weightType": "style transfer"
+      }
+    },
+    "lite": {
+      "title": "Lite",
+      "generate": {
+        "ckpt": "DreamShaper8_LCM.safetensors",
+        "base": 576,
+        "steps": 6,
+        "cfg": 1.5,
+        "sampler": "lcm",
+        "scheduler": "sgm_uniform"
+      },
+      "upscale": "RealESRGAN_x2plus.pth",
+      "edit": null,
+      "styleRef": {
+        "ipadapter": "ip-adapter-plus_sd15.safetensors",
+        "clipVision": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors",
+        "weightType": "linear"
+      }
+    }
+  },
+  "update": {
+    "repo": "YuriyKhudov/arto",
+    "branch": "main"
+  }
+}
