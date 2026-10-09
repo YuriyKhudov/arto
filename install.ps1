@@ -36,11 +36,27 @@ $cpuOnly = $vram -eq 0
 Say "   видеокарта: $gpu$(if ($vram) { ", $([math]::Round($vram/1024)) ГБ" })"
 
 if (-not $Edition) {
-  $Edition = if ($vram -ge 12000) { "pro" } else { "lite" }
-  $why = if ($vram -ge 12000) { "мощная видеокарта — полная версия с ИИ-редактором" } elseif ($cpuOnly) { "видеокарты NVIDIA нет — облегчённая версия, рисование на процессоре (медленно)" } else { "видеокарты до 12 ГБ — облегчённая версия" }
-  Say "   рекомендую: $($Edition.ToUpper()) ($why)" "Green"
-  $ans = Read-Host "   Enter — согласиться, или впишите pro / lite"
-  if ($ans -match '^(pro|lite)$') { $Edition = $ans }
+  $rec = if ($vram -ge 12000) { "pro" } else { "lite" }
+  $mark = @{ pro = ""; lite = "" }; $mark[$rec] = "   <- рекомендую для этого компьютера"
+  Write-Host ""
+  Write-Host "   Выберите версию:" -ForegroundColor Yellow
+  Write-Host ""
+  Write-Host "   1) LITE$($mark.lite)" -ForegroundColor Cyan
+  Write-Host "      Рисование эскизов во всех техниках, стиль с картинок, редактор с кистью и лассо."
+  Write-Host "      Без ИИ-редактирования словами. Подходит для слабых ПК и даже без видеокарты."
+  Write-Host "      Нужно: видеокарта NVIDIA от 4 ГБ (или без неё — медленно). Скачать ~10 ГБ."
+  Write-Host ""
+  Write-Host "   2) PRO$($mark.pro)" -ForegroundColor Cyan
+  Write-Host "      Всё из Lite + качество крупнее и детальнее + ИИ-редактор:"
+  Write-Host "      «измени словами», исправление анатомии, правки по выделению."
+  Write-Host "      Нужно: видеокарта NVIDIA от 12 ГБ, 32 ГБ оперативной памяти. Скачать ~40 ГБ."
+  Write-Host ""
+  if ($rec -eq "lite" -and $vram -gt 0) { Say "   У вас $([math]::Round($vram/1024)) ГБ видеопамяти — Pro может работать очень медленно или не запуститься." "DarkYellow" }
+  if ($cpuOnly) { Say "   Видеокарта NVIDIA не найдена — Pro работать не будет, Lite будет рисовать на процессоре (минуты на картинку)." "DarkYellow" }
+  do {
+    $ans = (Read-Host "   Введите 1 или 2").Trim()
+  } until ($ans -in @("1", "2"))
+  $Edition = if ($ans -eq "2") { "pro" } else { "lite" }
 }
 Say "   версия: $($Edition.ToUpper())" "Green"
 
