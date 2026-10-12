@@ -80,7 +80,7 @@ async function model(folder, name) {
   const key = folder + '|' + name;
   if (!modelCache[key]) {
     const found = await comfy.resolve(folder, name);
-    if (!found) throw new Error(`Не найдена модель «${name}». Переустановите Arto.`);
+    if (!found) throw new Error(`Не найдена модель «${name}». Запустите install.bat — он докачает только недостающие модели, работы сохранятся.`);
     modelCache[key] = found;
   }
   return modelCache[key];
