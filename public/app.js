@@ -70,6 +70,8 @@ async function init() {
   Editor.bindUI();
   Editor.loadTools();
   loadMyStyles();
+  Paints.bind();
+  bindPrompts();
   buildControls();
   renderExamples();
   renderEngine();
@@ -335,6 +337,12 @@ async function action(act, job, index) {
         await api('/api/jobs/' + job.id + '/cancel', {});
         toast('Отменяю…');
         return;
+      case 'save-prompt':
+        openSavePrompt(job);
+        return;
+      case 'paints':
+        await Paints.open('/images/' + job.images[index].file);
+        return;
       case 'reroll':
         addJob(await api('/api/reroll', { jobId: job.id }));
         break;
@@ -541,6 +549,7 @@ function jobHTML(job) {
           ? '<button class="btn cancel" data-a="cancel">■ Отменить</button>'
           : '<button class="btn" data-a="reroll">↻ Ещё раз</button>'}
         <button class="btn" data-a="reuse">Повторить текст</button>
+        ${job.type === 'studio' || job.type === 'upscale' ? '' : '<button class="btn star" data-a="save-prompt" title="Сохранить запрос в «Мои промпты»">☆</button>'}
         ${job.status === 'running' ? '' : '<button class="btn danger" data-a="delete-job" title="Удалить">✕</button>'}
       </div>
       <div class="time">${job.status === 'running' ? `Рисую… ${done} из ${n}` : time}</div>
@@ -656,12 +665,103 @@ function lbStep(d) {
   renderLightbox();
 }
 
+// ---------------- «Мои промпты» ----------------
+let prompts = [];
+let saveFor = null;
+
+function openSavePrompt(job) {
+  saveFor = job;
+  $('#spTitle').value = (job.prompt || '').slice(0, 40);
+  $('#spText').textContent = job.rawPrompt || job.prompt;
+  $('#savePrompt').hidden = false;
+  $('#spTitle').focus();
+  $('#spTitle').select();
+}
+
+async function loadPrompts() {
+  try { prompts = await api('/api/prompts'); } catch (e) { return toast(e.message, true); }
+  renderPrompts();
+}
+
+function renderPrompts() {
+  const q = ($('#prSearch').value || '').toLowerCase();
+  const list = prompts.filter((p) => !q || (p.title + ' ' + p.prompt).toLowerCase().includes(q));
+  $('#prEmpty').hidden = prompts.length > 0;
+  $('#prList').innerHTML = list.map((p) => {
+    const chips = p.kind === 'edit'
+      ? ['изменение картинки']
+      : [styleName(p.params.style || 'raw'), formatName(p.params.ar || '1:1'), p.params.quality === 'draft' ? 'черновик' : p.params.quality === 'high' ? 'высокое качество' : ''].filter(Boolean);
+    return `<div class="pr-row" data-id="${p.id}">
+      <div class="pr-thumb">${p.thumb ? `<img src="/images/${esc(p.thumb)}" alt="" loading="lazy">` : '<span>✎</span>'}</div>
+      <div class="pr-main">
+        <div class="pr-title" contenteditable="true" spellcheck="false" title="Нажмите, чтобы переименовать">${esc(p.title)}</div>
+        <div class="pr-text">${esc(p.prompt)}</div>
+        <div class="chips">${chips.map((c) => `<span class="chip">${esc(c)}</span>`).join('')}</div>
+      </div>
+      <div class="pr-actions">
+        <button class="btn primary" data-pa="use">Использовать</button>
+        <button class="btn danger" data-pa="del" title="Удалить">✕</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function usePrompt(p) {
+  showPage('create');
+  setMode(p.kind === 'edit' ? 'edit' : 'draw');
+  if (p.kind !== 'edit') {
+    for (const [k, v] of Object.entries(p.params || {})) if (v != null && v !== '') state.params[k] = v;
+    saveParams();
+    syncControls();
+  }
+  $('#prompt').value = p.prompt;
+  autosize();
+  $('#prompt').focus();
+  toast('Запрос вставлен — нажмите «' + (p.kind === 'edit' ? 'Изменить' : 'Нарисовать') + '»');
+}
+
+function bindPrompts() {
+  $('#spCancel').onclick = () => ($('#savePrompt').hidden = true);
+  $('#savePrompt').addEventListener('click', (e) => { if (e.target.id === 'savePrompt') $('#savePrompt').hidden = true; });
+  const save = async () => {
+    try {
+      await api('/api/prompts', { jobId: saveFor.id, title: $('#spTitle').value });
+      $('#savePrompt').hidden = true;
+      toast('Сохранено в «Мои промпты»');
+    } catch (e) { toast(e.message, true); }
+  };
+  $('#spSave').onclick = save;
+  $('#spTitle').addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') $('#savePrompt').hidden = true; });
+  $('#prSearch').addEventListener('input', renderPrompts);
+  $('#prList').addEventListener('click', async (e) => {
+    const row = e.target.closest('.pr-row');
+    const b = e.target.closest('[data-pa]');
+    if (!row || !b) return;
+    const p = prompts.find((x) => x.id === row.dataset.id);
+    if (b.dataset.pa === 'use') usePrompt(p);
+    if (b.dataset.pa === 'del' && confirm('Удалить «' + p.title + '» из «Моих промптов»?')) {
+      await api('/api/prompts/' + p.id, null, 'DELETE');
+      loadPrompts();
+    }
+  });
+  // переименование прямо в строке
+  $('#prList').addEventListener('keydown', (e) => { if (e.target.classList.contains('pr-title') && e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
+  $('#prList').addEventListener('focusout', async (e) => {
+    if (!e.target.classList.contains('pr-title')) return;
+    const p = prompts.find((x) => x.id === e.target.closest('.pr-row').dataset.id);
+    const t = e.target.textContent.trim();
+    if (p && t && t !== p.title) { p.title = t; await api('/api/prompts/' + p.id, { title: t }, 'PATCH'); toast('Переименовано'); }
+  });
+}
+
 // ---------------- навигация и события ----------------
 function showPage(page) {
   state.page = page;
+  document.body.dataset.page = page;
   $$('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.page === page));
   $$('.page').forEach((p) => (p.hidden = p.id !== 'page-' + page));
   if (page === 'gallery') renderGallery();
+  if (page === 'prompts') loadPrompts();
 }
 
 function renderExamples() {

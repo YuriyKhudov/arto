@@ -415,6 +415,11 @@ const STYLES_FILE = path.join(DATA, 'styles.json');
 let myStyles = readJSON(STYLES_FILE, []);
 const saveStyles = () => fs.writeFileSync(STYLES_FILE, JSON.stringify(myStyles, null, 1));
 
+// ---------- «Мои промпты» ----------
+const PROMPTS_FILE = path.join(DATA, 'prompts.json');
+let myPrompts = readJSON(PROMPTS_FILE, []);
+const savePrompts = () => fs.writeFileSync(PROMPTS_FILE, JSON.stringify(myPrompts, null, 1));
+
 function imageBuf(jobId, index) {
   const img = findJob(jobId)?.images[index];
   return img?.file ? fs.readFileSync(path.join(IMAGES, img.file)) : null;
@@ -515,6 +520,52 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, job);
     }
 
+    // ---------- «Мои промпты»: только то, что художник сохранил сам ----------
+    if (p === '/api/prompts' && req.method === 'GET') return send(res, 200, myPrompts);
+    if (p === '/api/prompts' && req.method === 'POST') {
+      const body = await readBody(req);
+      const src = body.jobId ? findJob(body.jobId) : null;
+      const text = String(body.prompt || src?.rawPrompt || src?.prompt || '').trim();
+      if (!text) return send(res, 400, { error: 'Нет текста запроса' });
+      const pr = {
+        id: newId(), createdAt: Date.now(),
+        title: String(body.title || '').trim().slice(0, 80) || text.slice(0, 40),
+        prompt: text,
+        kind: src?.type === 'edit' ? 'edit' : 'draw',
+        params: src?.params ? (({ style, ar, quality, stylize, chaos, weird, no, count }) => ({ style, ar, quality, stylize, chaos, weird, no, count }))(src.params) : {},
+        thumb: null,
+      };
+      // превью — своя маленькая копия, чтобы не пропала при удалении работы
+      const img = src?.images?.find((i) => i.file);
+      if (img) {
+        try {
+          const buf = await require('sharp')(path.join(IMAGES, img.file)).resize(320, 320, { fit: 'cover' }).jpeg({ quality: 82 }).toBuffer();
+          pr.thumb = `prompt_${pr.id}.jpg`;
+          fs.writeFileSync(path.join(IMAGES, pr.thumb), buf);
+        } catch (e) { logError('Превью промпта', e); }
+      }
+      myPrompts.unshift(pr);
+      savePrompts();
+      return send(res, 200, pr);
+    }
+    const pm = /^\/api\/prompts\/([\w-]+)$/.exec(p);
+    if (pm) {
+      const pr = myPrompts.find((x) => x.id === pm[1]);
+      if (!pr) return send(res, 404, { error: 'Не найдено' });
+      if (req.method === 'PATCH') {
+        const body = await readBody(req);
+        if (typeof body.title === 'string') pr.title = body.title.trim().slice(0, 80) || pr.title;
+        if (typeof body.prompt === 'string' && body.prompt.trim()) pr.prompt = body.prompt.trim();
+        savePrompts();
+        return send(res, 200, pr);
+      }
+      if (req.method === 'DELETE') {
+        myPrompts = myPrompts.filter((x) => x !== pr);
+        savePrompts();
+        if (pr.thumb) fs.rm(path.join(IMAGES, pr.thumb), () => {});
+        return send(res, 200, { ok: true });
+      }
+    }
     if (p === '/api/styles' && req.method === 'GET') return send(res, 200, myStyles);
     if (p === '/api/styles' && req.method === 'POST') {
       const body = await readBody(req);
