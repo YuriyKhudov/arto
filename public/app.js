@@ -183,6 +183,9 @@ function syncControls() {
     $('#v' + k[0].toUpperCase() + k.slice(1)).textContent = LEVELS[k](+p[k]);
   }
   $('#no').value = p.no;
+  const raw = p.style === 'raw';
+  for (const k of ['stylize', 'chaos', 'weird']) $('#' + k).closest('.slider').hidden = raw;
+  $('#rawNote').hidden = !raw;
   $('#iwWrap').style.display = state.ref ? '' : 'none';
   renderRef();
   renderStyleRefs();
@@ -1113,7 +1116,7 @@ function bindEvents() {
     $('#more').hidden = !$('#more').hidden;
     $('#moreBtn').classList.toggle('on', !$('#more').hidden);
   };
-  $('#style').onchange = (e) => { state.params.style = e.target.value; saveParams(); };
+  $('#style').onchange = (e) => { state.params.style = e.target.value; saveParams(); syncControls(); };
   segHandler('#formatSeg', (b) => { state.params.ar = b.dataset.ar; saveParams(); });
   segHandler('#countSeg', (b) => { state.params.count = +b.dataset.v; saveParams(); });
   segHandler('#qualitySeg', (b) => { state.params.quality = b.dataset.v; saveParams(); });

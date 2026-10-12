@@ -120,6 +120,8 @@ function pick(rng, arr) { return arr[Math.floor(rng() * arr.length)]; }
 function buildPrompts({ subject, style = 'graphite', stylize = 100, chaos = 0, weird = 0, no = '', seed = 0, count = 4, guards = [] }) {
   const gs = GUARDS.filter((g) => (guards || []).includes(g.id));
   const st = STYLES.find((s) => s.id === style) || STYLES[0];
+  // «Без стиля» — только текст художника: никаких своих добавок (красивостей, разнообразия, странности)
+  if (st.id === 'raw') { stylize = 0; chaos = 0; weird = 0; }
   // Техника — в начало и с повышенным весом: иначе модели скатываются в фото
   const [medium, ...details] = st.core.split(', ');
   const base = st.core ? [`(${medium}:1.3) of ${subject.trim()}`, details.join(', ')] : [subject.trim()];
