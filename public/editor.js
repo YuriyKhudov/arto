@@ -321,6 +321,7 @@ const Editor = (() => {
     btns.forEach((b) => (b.disabled = true));
     const status = $('#edAiStatus');
     status.hidden = false;
+    $('#edAiVariants').hidden = true;
     const cancelBtn = $('#edAiCancel');
     cancelBtn.hidden = false;
     let jobId = null;
@@ -334,7 +335,7 @@ const Editor = (() => {
     try {
       const r = await fetch('/api/edit', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instruction, sources: [ed.img.toDataURL('image/png')], count: 1, temp: true, quality: ed.aiQuality || 'normal' }),
+        body: JSON.stringify({ instruction, sources: [ed.img.toDataURL('image/png')], count: ed.aiCount || 1, temp: true }),
       });
       let job = await r.json();
       if (!r.ok) throw new Error(job.error);
@@ -342,14 +343,20 @@ const Editor = (() => {
       while (job.status === 'running') {
         await new Promise((ok) => setTimeout(ok, 1200));
         job = await (await fetch('/api/jobs/' + job.id)).json();
-        const p = job.images[0]?.progress;
-        if (p) status.textContent = `ИИ: ${({ queued: 'в очереди', loading: 'готовлюсь', model: 'загружаю модель', drawing: 'рисую' })[p.stage] || 'работаю'} — ${p.pct || 0}%${p.slow ? ' · до минуты' : p.eta ? ' · ~' + p.eta + ' с' : ''}`;
+        const doneN = job.images.filter((x) => x.file || x.error).length;
+        const p = job.images.find((x) => x.progress)?.progress;
+        if (p && job.images.length > 1) status.textContent = `Вариант ${doneN + 1} из ${job.images.length} — ${p.pct || 0}%`;
+        else if (p) status.textContent = `ИИ: ${({ queued: 'в очереди', loading: 'готовлюсь', model: 'загружаю модель', drawing: 'рисую' })[p.stage] || 'работаю'} — ${p.pct || 0}%${p.slow ? ' · до минуты' : p.eta ? ' · ~' + p.eta + ' с' : ''}`;
       }
       const res = job.images[0];
       if (job.cancelled || res.cancelled) { toast('Отменено — можно поправить текст и попробовать снова'); return; }
-      if (!res.file) throw new Error(res.error || 'Не получилось');
-      const out = await loadImage('/images/' + res.file);
-      applyMasked(out, hasMask() ? 'Готово — изменено выделенное' : 'Готово', 10);
+      const good = job.images.filter((x) => x.file);
+      if (!good.length) throw new Error(res.error || 'Не получилось');
+      if (good.length === 1) {
+        applyMasked(await loadImage('/images/' + good[0].file), hasMask() ? 'Готово — изменено выделенное' : 'Готово', 10);
+      } else {
+        showVariants(good, hasMask());
+      }
     } catch (e) {
       toast(e.message, true);
     } finally {
@@ -358,6 +365,26 @@ const Editor = (() => {
       cancelBtn.disabled = false;
       btns.forEach((b) => (b.disabled = false));
     }
+  }
+
+  // Несколько вариантов: миниатюры, клик — применить (повторный клик по другому — заменить)
+  function showVariants(list, masked) {
+    const box = $('#edAiVariants');
+    let applied = -1;
+    box.hidden = false;
+    box.innerHTML = '<div class="ed-opt-title">Выберите вариант</div><div class="ed-var-grid">'
+      + list.map((v, i) => `<button data-i="${i}" title="${(v.finalPrompt || '').replace(/"/g, '&quot;')}"><img src="/images/${v.file}" alt=""></button>`).join('')
+      + '</div><button class="link-btn" id="edVarClose">Готово</button>';
+    box.onclick = async (e) => {
+      if (e.target.id === 'edVarClose') { box.hidden = true; return; }
+      const b = e.target.closest('[data-i]');
+      if (!b) return;
+      if (applied >= 0) undo(); // убрать прошлый вариант, вернуть исходник и выделение
+      applied = +b.dataset.i;
+      box.querySelectorAll('[data-i]').forEach((x) => x.classList.toggle('on', x === b));
+      applyMasked(await loadImage('/images/' + list[applied].file), masked ? 'Вариант применён к выделенному' : 'Вариант применён', 10);
+    };
+    box.querySelector('[data-i="0"]').click();
   }
 
   async function save() {
@@ -397,6 +424,12 @@ const Editor = (() => {
     $('#edClearMask').onclick = clearMask;
     $('#edInvertMask').onclick = invertMask;
     $('#edAiGo').onclick = () => aiEdit($('#edAiText').value);
+    $('#edAiCount').onclick = (e) => {
+      const b = e.target.closest('[data-v]');
+      if (!b) return;
+      ed.aiCount = +b.dataset.v;
+      document.querySelectorAll('#edAiCount button').forEach((x) => x.classList.toggle('on', x === b));
+    };
     $('#edAiRemove').onclick = () => {
       if (!hasMask()) return toast('Сначала выделите, что убрать — кистью или лассо', true);
       aiEdit('Remove the objects in the marked area completely and seamlessly fill it with the surrounding background, keeping the same drawing style.');

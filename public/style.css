@@ -532,3 +532,23 @@ body.editing .view-ctl { display: none; }
 @media (max-width: 720px) { .pr-row { grid-template-columns: 64px 1fr; } .pr-thumb { width: 64px; height: 64px; } .pr-actions { grid-column: 1 / -1; } }
 
 body[data-page="prompts"] .view-ctl { display: none; }
+
+/* ===== несколько вариантов в редакторе ===== */
+.ed-varcount { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+.ed-variants { display: flex; flex-direction: column; gap: 8px; }
+.ed-var-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.ed-var-grid button { padding: 0; border: 2px solid transparent; border-radius: 10px; overflow: hidden; background: var(--bg-2); aspect-ratio: 1; }
+.ed-var-grid button img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ed-var-grid button.on { border-color: var(--accent); }
+.ed-variants .link-btn { align-self: flex-end; }
+
+/* ===== картинка-основа ===== */
+.ref-x { position: absolute; top: -4px; right: -4px; width: 18px; height: 18px; border-radius: 50%; background: #e2766b; color: #fff;
+  font-size: 13px; line-height: 17px; text-align: center; z-index: 2; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+.ref-btn { overflow: visible; }
+.ref-btn img { border-radius: 11px; }
+.ref-note { flex-wrap: wrap; }
+.ref-note b { color: var(--text); font-weight: 500; }
+.ref-power { display: inline-flex; align-items: center; gap: 6px; }
+.ref-power input { width: 110px; }
+.ref-power em { font-style: normal; color: var(--accent-2); }

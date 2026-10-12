@@ -36,6 +36,7 @@
           <input type="file" id="refInput" accept="image/*" hidden>
           <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
           <img id="refThumb" alt="" hidden>
+          <span class="ref-x" id="refX" title="Убрать картинку-основу" hidden>×</span>
         </label>
         <button class="icon-btn style-btn" id="styleBtn" title="Стиль с картинок — как --sref в Midjourney">
           <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.5-.8 1.2-1.6-.4-1-.1-2.4 1.5-2.4H17a4 4 0 0 0 4-4c0-5.5-4-10-9-10z"/><circle cx="7.5" cy="11" r="1.2"/><circle cx="10.5" cy="7" r="1.2"/><circle cx="15.5" cy="7.5" r="1.2"/></svg>
@@ -229,12 +230,14 @@
       <div class="ed-ai" id="edAiBox">
         <div class="ed-opt-title">✦ ИИ</div>
         <textarea id="edAiText" rows="3" placeholder="Что сделать? Например: замени на открытое окно; добавь кота; сделай фон светлее"></textarea>
+        <div class="ed-varcount"><span>Вариантов</span><div class="seg" id="edAiCount"><button data-v="1" class="on">1</button><button data-v="2">2</button><button data-v="4">4</button></div></div>
         <div class="ed-row">
           <button class="btn primary" id="edAiGo">Сделать</button>
           <button class="btn" id="edAiRemove" title="Убрать выделенный объект">Убрать выделенное</button>
         </div>
         <p class="ed-hint">Если что-то выделено — ИИ поменяет только эту часть. Без выделения — всю картинку.</p>
         <p class="ed-status" id="edAiStatus" hidden></p>
+        <div class="ed-variants" id="edAiVariants" hidden></div>
         <button class="btn cancel" id="edAiCancel" hidden>■ Отменить</button>
       </div>
     </aside>

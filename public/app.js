@@ -198,12 +198,16 @@ function setMode(mode) {
 
 function renderRef() {
   const note = $('#refNote');
-  if (!state.ref || state.mode === 'edit') { note.hidden = true; $('#refThumb').hidden = true; return; }
+  if (!state.ref || state.mode === 'edit') { note.hidden = true; $('#refThumb').hidden = true; $('#refX').hidden = true; return; }
   $('#refThumb').src = state.ref;
   $('#refThumb').hidden = false;
+  $('#refX').hidden = false;
   note.hidden = false;
-  note.innerHTML = 'Картинка-основа подключена — эскизы будут строиться от неё. <button id="refClear">Убрать</button>';
+  note.innerHTML = `<b>Картинка-основа:</b> новые эскизы повторяют её композицию и персонажа.
+    <label class="ref-power">сила <input type="range" id="iwInline" min="0" max="2" step="0.1" value="${state.params.iw}"> <em>${LEVELS.iw(+state.params.iw)}</em></label>
+    <button id="refClear">× Убрать</button>`;
   $('#refClear').onclick = () => { state.ref = null; syncControls(); };
+  $('#iwInline').oninput = (e) => { state.params.iw = +e.target.value; saveParams(); e.target.nextElementSibling.textContent = LEVELS.iw(state.params.iw); $('#iw').value = state.params.iw; };
 }
 
 function renderSources() {
@@ -870,6 +874,7 @@ function bindEvents() {
   };
   $('#resetParams').onclick = () => { state.params = { ...DEFAULT_PARAMS }; saveParams(); syncControls(); };
 
+  $('#refX').onclick = (e) => { e.preventDefault(); e.stopPropagation(); state.ref = null; syncControls(); };
   $('#refInput').onchange = (e) => { const f = e.target.files[0]; if (f) addImage(f); e.target.value = ''; };
   document.addEventListener('paste', (e) => {
     const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith('image/'));

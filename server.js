@@ -245,6 +245,15 @@ function pngSize(buf) {
 }
 
 // Запустить ИИ-редактор на загруженных картинках. Pro — Qwen-Image-Edit, Lite — FLUX.2 klein.
+// Понятная модели инструкция: английский + «остальное не трогай»; варианты отличаются силой изменения
+const VARIETY = ['', ' Make the change clearly visible.', ' Keep the change subtle and natural.', ' Make the change bold and expressive.'];
+async function editInstruction(text, variant = 0) {
+  if (text === FIX_INSTRUCTION) return text;
+  let en = (await toEnglish(text)).trim().replace(/[.!\s]+$/, '');
+  if (!en) en = text;
+  return `Edit the image: ${en}. Keep everything that is not mentioned unchanged.${VARIETY[variant % VARIETY.length]}`;
+}
+
 async function runEdit({ names, firstBuf, instruction, seed, prog }) {
   const e = edition.edit;
   const opts = {
@@ -259,7 +268,6 @@ async function runEdit({ names, firstBuf, instruction, seed, prog }) {
   };
   if (e.kind === 'flux2') {
     // klein понимает в основном английский; размер — ~1 Мп с пропорциями исходника, кратно 16
-    opts.instruction = await toEnglish(instruction);
     const [w0, h0] = (firstBuf && pngSize(firstBuf)) || [1024, 1024];
     const k = Math.sqrt(((e.megapixels || 1) * 1024 * 1024) / (w0 * h0));
     opts.width = Math.max(256, Math.round((w0 * k) / 16) * 16);
@@ -352,7 +360,9 @@ function createEdit({ instruction, sources, count, from, isTemp, preserve = true
   let names = null;
   return startJob(job, async (img, prog) => {
     if (!names) names = await Promise.all(sources.map((buf, i) => comfy.upload(buf, `${job.id}_src${i}.${sniffExt(buf)}`)));
-    const out = await runEdit({ names, firstBuf: sources[0], instruction, seed: img.seed, prog });
+    const en = await editInstruction(instruction, img.index);
+    img.finalPrompt = en; // «как ИИ понял запрос» — видно в подробностях
+    const out = await runEdit({ names, firstBuf: sources[0], instruction: en, seed: img.seed, prog });
     return preserve && sources.length === 1 ? keepTexture(sources[0], out) : out;
   });
 }
