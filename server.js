@@ -15,7 +15,7 @@ function logError(where, e) {
 process.on('uncaughtException', (e) => { logError('Ошибка', e); process.exit(1); });
 process.on('unhandledRejection', (e) => logError('Ошибка (async)', e));
 
-const { STYLES, buildPrompts, parseInlineParams, dimsFor } = require('./prompt');
+const { STYLES, GUARDS, buildPrompts, parseInlineParams, dimsFor } = require('./prompt');
 const { Comfy, wfGenerate, wfUpscale, wfEdit, wfOutpaint, wfOutpaintUnion, wfTrainLora } = require('./comfy');
 const { toEnglish, preload: preloadTranslator } = require('./translate');
 // библиотека картинок нужна только для сохранения фактуры — если её нет, остальное работает
@@ -203,7 +203,9 @@ async function createImagine({ prompt, params, ref, variation, styles = [], cont
   const subjectEn = await toEnglish(inline.text);
   const noEn = await toEnglish(p.no);
   const mlEntry = p.myLora && myLoras.find((x) => x.id === p.myLora.id);
-  const built = buildPrompts({ subject: (mlEntry ? mlEntry.trigger + ' style artwork, ' : '') + subjectEn, style: p.style, stylize: +p.stylize, chaos: +p.chaos, weird: +p.weird, no: noEn, seed, count });
+  // своя манера сама задаёт технику, свет и фактуру: «эстетический слой» и техника Arto её забивают (проверено)
+  if (mlEntry) styles = [];
+  const built = buildPrompts({ subject: (mlEntry ? mlEntry.trigger + ' style artwork, ' : '') + subjectEn, style: mlEntry ? 'raw' : p.style, stylize: mlEntry ? 0 : +p.stylize, chaos: mlEntry ? 0 : +p.chaos, weird: mlEntry ? 0 : +p.weird, no: noEn, seed, count, guards: p.guards });
   // Качество: черновик — меньше и быстрее; высокое — больше шагов и сразу увеличение ×2
   const q = ['draft', 'normal', 'high'].includes(p.quality) ? p.quality : 'normal';
   const g0 = edition.generate;
@@ -222,6 +224,7 @@ async function createImagine({ prompt, params, ref, variation, styles = [], cont
     rawPrompt: prompt,
     params: { ...p, seed, count, width, height, quality: q },
     usedReference: !!refBuf,
+    mannerName: mlEntry ? mlEntry.name : undefined,
     styleFiles: [],
     negative: built.negative,
     images: built.prompts.map((fp, i) => ({ index: i, finalPrompt: fp, seed: seed + i, file: null, error: null, liked: false })),
@@ -261,7 +264,7 @@ async function createImagine({ prompt, params, ref, variation, styles = [], cont
     const sr = edition.styleRef;
     const style = styleNames && sr ? { ...sr, ipadapter: await model('ipadapter', sr.ipadapter), clipVision: await model('clip_vision', sr.clipVision) } : null;
     const ml = p.myLora && myLoras.find((x) => x.id === p.myLora.id);
-    const loras = ml ? [{ name: await model('loras', ml.file), strength: Math.max(0, Math.min(1.5, +p.myLora.w || 1)) }] : [];
+    const loras = ml ? [{ name: await model('loras', ml.file), strength: Math.max(0, Math.min(1.5, +p.myLora.w || 0.8)) }] : [];
     const out = await comfy.run(wfGenerate({
       ckpt: await model('checkpoints', g.ckpt), loras,
       prompt: img.finalPrompt, negative: built.negative, width, height, seed: img.seed,
@@ -657,6 +660,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/state' && req.method === 'GET') {
       return send(res, 200, {
         styles: STYLES.map(({ id, name, hint }) => ({ id, name, hint })),
+        guards: GUARDS.map(({ id, name, hint }) => ({ id, name, hint })),
         edition: { id: edition.id, title: edition.title, canEdit: !!edition.edit },
         version: updater.localVersion(),
         engine: { status: comfy.status, message: comfy.message },

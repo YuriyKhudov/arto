@@ -601,7 +601,7 @@ body[data-page="boards"] .view-ctl { display: none; }
 
 /* ===== моя манера ===== */
 .ml-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
-.ml-power { width: 220px; }
+.ml-power { width: 340px; }
 .tr-box { width: min(560px, 100%); }
 .tr-hint { margin: 0; font-size: 13px; line-height: 1.5; }
 .tr-box #trBoard { width: 100%; }
@@ -629,3 +629,7 @@ body.touring .tour-block, body.touring .tour-spot, body.touring .tour-card { dis
 .tour-card img { display: block; max-width: 100%; border-radius: 8px; margin-bottom: 10px; }
 .tour-foot { display: flex; justify-content: space-between; gap: 8px; }
 @keyframes tourPulse { 50% { box-shadow: 0 0 0 9999px rgba(6,6,8,.72), 0 0 28px 6px rgba(232,194,122,.7); } }
+
+.ml-note { margin: 4px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line); color: var(--accent-2); font-size: 13px; line-height: 1.5; }
+.pick.ml-on select { opacity: .45; }
+.pick.ml-on::after { content: 'задаёт ваша манера'; font-size: 12px; color: var(--accent); }

@@ -5,6 +5,9 @@ const path = require('path');
 
 // корень слова (регулярка) → точный английский; длинные фразы — раньше коротких
 const GLOSSARY = [
+  // позы и ракурсы (машинный перевод путает: «в пол оборота» → «на проигрывателе»)
+  [/в\s*пол[\s-]*оборота|вполоборота|пол[\s-]*оборота/gi, 'in three-quarter view, body half-turned'],
+  [/в\s*профиль/gi, 'in profile view'], [/анфас/gi, 'front view, facing the viewer'], [/со\s*спины/gi, 'seen from behind'],
   // взгляд, выражение лица, настроение
   [/томн\S*\s+взгляд\S*/gi, 'languid sultry gaze'], [/томн\S*/gi, 'languid'],
   [/чувственн\S*/gi, 'sensual'], [/соблазнительн\S*/gi, 'seductive'], [/развратн\S*/gi, 'lewd'], [/страстн\S*/gi, 'passionate'],

@@ -10,7 +10,7 @@ const FORMATS = [
   { ar: '3:2', name: 'Альбом' },
   { ar: '16:9', name: 'Широкий' },
 ];
-const DEFAULT_PARAMS = { quality: 'normal', style: 'graphite', ar: '1:1', count: 4, stylize: 250, chaos: 0, weird: 0, iw: 1, no: '', sw: 1 };
+const DEFAULT_PARAMS = { quality: 'normal', style: 'graphite', ar: '1:1', count: 4, stylize: 250, chaos: 0, weird: 0, iw: 1, no: '', sw: 1, guards: [] };
 const EXAMPLES = [
   'старый маяк в шторм, одинокая фигура на берегу',
   'портрет пожилой балерины в гримёрке',
@@ -59,6 +59,7 @@ function toast(msg, err) {
 async function init() {
   const s = await api('/api/state');
   state.styles = s.styles;
+  state.guards = s.guards || [];
   state.edition = s.edition;
   state.version = s.version;
   state.engine = s.engine;
@@ -155,6 +156,7 @@ function buildControls() {
     const k = 16 / Math.max(a, b);
     return `<button data-ar="${f.ar}" title="${f.ar}"><i style="width:${a * k}px;height:${b * k}px"></i>${f.name}</button>`;
   }).join('');
+  $('#guardSeg').innerHTML = (state.guards || []).map((g) => `<button data-g="${g.id}" title="${esc(g.hint)}">${esc(g.name)}</button>`).join('');
   syncControls();
 }
 
@@ -173,6 +175,7 @@ function syncControls() {
   $$('#formatSeg button').forEach((b) => b.classList.toggle('on', b.dataset.ar === p.ar));
   $$('#countSeg button').forEach((b) => b.classList.toggle('on', +b.dataset.v === +p.count));
   $$('#qualitySeg button').forEach((b) => b.classList.toggle('on', b.dataset.v === p.quality));
+  $$('#guardSeg button').forEach((b) => b.classList.toggle('on', (p.guards || []).includes(b.dataset.g)));
   if (document.activeElement !== $('#countInput')) $('#countInput').value = p.count;
   $$('#editCountSeg button').forEach((b) => b.classList.toggle('on', +b.dataset.v === +state.editCount));
   for (const k of ['stylize', 'chaos', 'weird', 'iw', 'sw']) {
@@ -238,10 +241,27 @@ async function loadMyLoras() {
   const cur = $('#myLora').value;
   $('#myLora').innerHTML = '<option value="">— нет —</option>' + state.myLoras.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('')
     + (state.myLoras.length ? '<option value="__del">— удалить манеру…</option>' : '');
-  if (state.myLoras.some((l) => l.id === cur)) $('#myLora').value = cur;
-  $('#myLoraPowerWrap').hidden = !$('#myLora').value;
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem('arto.manner') || '{}'); } catch {}
+  const want = cur || saved.id;
+  if (state.myLoras.some((l) => l.id === want)) $('#myLora').value = want;
+  if (!cur && saved.w) $('#myLoraPower').value = saved.w;
+  renderManner();
 }
 const myLoraParam = () => ($('#myLora').value ? { id: $('#myLora').value, w: +$('#myLoraPower').value } : null);
+// С манерой всё лишнее прячем: она сама задаёт технику и фактуру, образцы стиля только мешают
+function renderManner() {
+  const on = !!$('#myLora').value;
+  const w = +$('#myLoraPower').value;
+  $('#myLoraPowerWrap').hidden = !on;
+  $('#vMl').textContent = w < 0.65 ? 'слегка' : w <= 0.9 ? 'как в образцах' : 'сильнее';
+  $('#mlNote').hidden = !on;
+  $('#stRefs').hidden = on;
+  $('.st-mine').hidden = on;
+  $('#style').disabled = on;
+  $('#style').closest('.pick').classList.toggle('ml-on', on);
+  try { localStorage.setItem('arto.manner', JSON.stringify({ id: $('#myLora').value, w })); } catch {}
+}
 
 function bindTrain() {
   let files = [];
@@ -254,9 +274,10 @@ function bindTrain() {
       const l = state.myLoras[+prompt('Какую манеру удалить? Введите номер:\n' + list) - 1];
       if (l && confirm('Удалить манеру «' + l.name + '»?')) { await api('/api/loras/' + l.id, null, 'DELETE'); await loadMyLoras(); }
     }
-    $('#myLoraPowerWrap').hidden = !e.target.value;
     if (e.target.value) $('#styleBtn').classList.add('on');
+    renderManner();
   };
+  $('#myLoraPower').oninput = renderManner;
   $('#trainOpen').onclick = async () => {
     files = [];
     $('#trCount').textContent = '';
@@ -337,18 +358,10 @@ function renderStyleRefs() {
   box.innerHTML = state.styleRefs.map((r, i) => `
     <div class="st-slot">
       <div class="src"><img src="${r.url}" alt=""><button data-rm="${i}" title="Убрать">×</button></div>
-      <input type="range" min="0" max="2" step="0.1" value="${r.w}" data-w="${i}" title="Влияние этой картинки">
-      <small>влияние <b>${Math.round(r.w * 100)}%</b></small>
     </div>`).join('')
     + (n < 3 ? `<label class="st-slot add"><div class="src add"><input type="file" accept="image/*" hidden id="styleInput"><span>+</span><small>${n ? 'ещё' : 'образец'}</small></div></label>` : '')
     + (n ? '' : '<p class="src-hint">Добавьте 1–3 картинки, чей стиль нравится: свои работы, картины мастеров, фото фактур. Можно перетащить сюда или нажать «Взять стиль» у любой работы.</p>');
   box.onclick = (e) => { const rm = e.target.closest('[data-rm]'); if (rm) { state.styleRefs.splice(+rm.dataset.rm, 1); renderStyleRefs(); } };
-  box.oninput = (e) => {
-    const i = e.target.dataset.w;
-    if (i == null) return;
-    state.styleRefs[i].w = +e.target.value;
-    e.target.nextElementSibling.querySelector('b').textContent = Math.round(state.styleRefs[i].w * 100) + '%';
-  };
   const inp = $('#styleInput');
   if (inp) inp.onchange = async (e) => { const f = e.target.files[0]; if (f) addStyleRef({ url: await blobToDataUrl(f, 1024) }); };
 }
@@ -366,8 +379,8 @@ function addStyleRef(r) {
   syncControls();
 }
 
-const styleRefPayload = () => state.styleRefs.map((r) => ({
-  w: r.w, ...(r.file ? { file: r.file } : r.jobId != null ? { jobId: r.jobId, index: r.index } : { data: r.data }),
+const styleRefPayload = () => ($('#myLora').value ? [] : state.styleRefs).map((r) => ({
+  w: 1, ...(r.file ? { file: r.file } : r.jobId != null ? { jobId: r.jobId, index: r.index } : { data: r.data }),
 }));
 
 async function loadMyStyles() {
@@ -615,15 +628,16 @@ function chipsHTML(job) {
   if (job.type === 'train') return `<span class="chip">${job.sources?.length || ''} образцов · ${job.params.steps} шагов</span>`;
   if (job.type === 'edit') return `<span class="chip">${job.sources?.length > 1 ? 'из ' + job.sources.length + ' картинок' : 'по картинке'}</span>${job.params?.quality === 'draft' ? '<span class="chip">черновик</span>' : ''}`;
   const p = job.params;
-  const chips = [styleName(p.style), formatName(p.ar || '1:1')];
+  const chips = [p.myLora ? null : styleName(p.style), formatName(p.ar || '1:1')].filter(Boolean);
   if (p.quality === 'draft') chips.push('черновик');
   if (p.quality === 'high') chips.push('высокое качество');
   if (+p.chaos) chips.push('разнообразие: ' + LEVELS.chaos(+p.chaos));
   if (+p.weird) chips.push('странность: ' + LEVELS.weird(+p.weird));
+  for (const id of p.guards || []) { const g = (state.guards || []).find((x) => x.id === id); if (g) chips.push('следить: ' + g.name.toLowerCase()); }
   if (p.no) chips.push('без: ' + p.no);
   if (job.usedReference) chips.push('от картинки');
   if (job.control) chips.push(job.control.mode === 'photo' ? 'по контуру фото' : 'по наброску');
-  if (p.myLora) { const ml = (state.myLoras || []).find((x) => x.id === p.myLora.id); chips.push('манера: ' + (ml ? ml.name : '—')); }
+  if (p.myLora) { const ml = (state.myLoras || []).find((x) => x.id === p.myLora.id); chips.push(job.mannerName || ml ? 'манера: ' + (job.mannerName || ml.name) : 'своя манера'); }
   if (p.series) chips.unshift(`серия ${p.series.n}/${p.series.of}`);
   return chips.map((c) => `<span class="chip">${esc(c)}</span>`).join('');
 }
@@ -1170,6 +1184,15 @@ function bindEvents() {
     const st = state.myStyles.find((x) => x.id === v);
     if (!st) return;
     state.styleRefs = st.files.map((f, i) => ({ url: '/images/' + f, file: f, w: st.weights?.[i] ?? 1 }));
+    syncControls();
+  };
+  $('#guardSeg').onclick = (e) => {
+    const b = e.target.closest('[data-g]');
+    if (!b) return;
+    const set = new Set(state.params.guards || []);
+    set.has(b.dataset.g) ? set.delete(b.dataset.g) : set.add(b.dataset.g);
+    state.params.guards = [...set];
+    saveParams();
     syncControls();
   };
   $('#resetParams').onclick = () => { state.params = { ...DEFAULT_PARAMS }; saveParams(); syncControls(); };

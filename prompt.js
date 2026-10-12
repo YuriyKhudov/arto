@@ -82,6 +82,30 @@ const WEIRD_POOL = [
 
 const DEFAULT_NEGATIVE = 'photo, photograph, photography, photorealistic, realistic, 3d render, frame, border, cgi, plastic, glossy, watermark, signature, text, logo, lowres, blurry, deformed';
 
+// «Следить за»: защита от типичных ошибок по сюжету. При низком CFG (Turbo/LCM) негатив действует слабо,
+// поэтому кроме коротких запретов (neg) — маленькая подсказка в само описание (pos).
+const GUARDS = [
+  { id: 'people', name: 'Люди', hint: 'лица, руки, пальцы, пропорции тела',
+    pos: 'natural proportions, correct anatomy',
+    neg: '(bad anatomy:1.2), (extra fingers:1.2), missing fingers, fused fingers, malformed hands, extra arms, extra legs, deformed face, asymmetrical eyes, cross-eyed, long neck, duplicate person' },
+  { id: 'animals', name: 'Животные', hint: 'лапы, хвосты, головы, морды',
+    pos: 'anatomically correct animal',
+    neg: '(extra legs:1.2), missing legs, (extra head:1.2), extra tail, fused animals, deformed paws, malformed muzzle, mutated body, human face on animal' },
+  { id: 'landscape', name: 'Пейзаж', hint: 'горизонт, перспектива, повторы',
+    pos: 'level horizon, coherent depth',
+    neg: 'tilted horizon, crooked horizon, two suns, floating rocks, repeated identical trees, cluttered composition, muddy colors, oversaturated sky' },
+  { id: 'stilllife', name: 'Натюрморт', hint: 'форма предметов, тени, перспектива',
+    pos: 'solid well-formed objects, consistent light',
+    neg: 'warped objects, melted objects, lopsided vase, floating objects, objects merging together, inconsistent shadows, distorted perspective, duplicated fruit' },
+  { id: 'buildings', name: 'Здания', hint: 'прямые линии, окна, перспектива',
+    pos: 'correct perspective, straight architectural lines',
+    neg: 'warped buildings, crooked walls, melted windows, impossible geometry, distorted perspective, floating buildings, broken architecture' },
+  { id: 'nopeople', name: 'Без людей', hint: 'на картинке не будет людей',
+    pos: '', neg: '(people:1.3), person, human, figure, crowd, silhouette of a person' },
+  { id: 'notext', name: 'Без надписей', hint: 'никаких букв, подписей, логотипов',
+    pos: '', neg: '(text:1.3), letters, words, writing, caption, signature, watermark, logo, numbers' },
+];
+
 function mulberry32(a) {
   return function () {
     a |= 0; a = (a + 0x6d2b79f5) | 0;
@@ -93,7 +117,8 @@ function mulberry32(a) {
 
 function pick(rng, arr) { return arr[Math.floor(rng() * arr.length)]; }
 
-function buildPrompts({ subject, style = 'graphite', stylize = 100, chaos = 0, weird = 0, no = '', seed = 0, count = 4 }) {
+function buildPrompts({ subject, style = 'graphite', stylize = 100, chaos = 0, weird = 0, no = '', seed = 0, count = 4, guards = [] }) {
+  const gs = GUARDS.filter((g) => (guards || []).includes(g.id));
   const st = STYLES.find((s) => s.id === style) || STYLES[0];
   // Техника — в начало и с повышенным весом: иначе модели скатываются в фото
   const [medium, ...details] = st.core.split(', ');
@@ -102,6 +127,7 @@ function buildPrompts({ subject, style = 'graphite', stylize = 100, chaos = 0, w
   for (const [t, text] of STYLIZE_TIERS) if (stylize >= t) base.push(text);
   if (drawn) for (const [t, text] of DRAWN_TIERS) if (stylize >= t) base.push(text);
   if (drawn) base.push('(hand-drawn traditional artwork:1.2)');
+  for (const g of gs) if (g.pos) base.push(g.pos);
 
   const prompts = [];
   for (let i = 0; i < count; i++) {
@@ -120,7 +146,7 @@ function buildPrompts({ subject, style = 'graphite', stylize = 100, chaos = 0, w
   }
 
   const baseNeg = style === 'raw' ? '' : st.negative || DEFAULT_NEGATIVE;
-  const negative = [baseNeg, no].filter((x) => x && x.trim()).join(', ');
+  const negative = [baseNeg, ...gs.map((g) => g.neg), no].filter((x) => x && x.trim()).join(', ');
   return { prompts, negative };
 }
 
@@ -167,4 +193,4 @@ function nearestRatio(ar, allowed) {
   return allowed.reduce((best, a) => (Math.abs(Math.log(parseRatio(a) / r)) < Math.abs(Math.log(parseRatio(best) / r)) ? a : best), allowed[0]);
 }
 
-module.exports = { STYLES, buildPrompts, parseInlineParams, dimsFor, nearestRatio, DEFAULT_NEGATIVE };
+module.exports = { STYLES, GUARDS, buildPrompts, parseInlineParams, dimsFor, nearestRatio, DEFAULT_NEGATIVE };
