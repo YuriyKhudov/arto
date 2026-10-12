@@ -214,9 +214,40 @@ function wfUpscale(o) {
   };
 }
 
+// Редактирование по команде, лёгкая модель (FLUX.2 klein 4B — для версии Lite).
+// Размер результата (o.width × o.height) считает сервер — шаги планировщика от него зависят.
+function wfEditFlux2(o) {
+  const e = o.edit;
+  const w = {
+    unet: { class_type: 'UNETLoader', inputs: { unet_name: e.unet, weight_dtype: e.dtype || 'default' } },
+    clip: { class_type: 'CLIPLoader', inputs: { clip_name: e.clip, type: 'flux2' } },
+    vae: { class_type: 'VAELoader', inputs: { vae_name: e.vae } },
+    pos: { class_type: 'CLIPTextEncode', inputs: { clip: ['clip', 0], text: o.instruction } },
+  };
+  let cond = ['pos', 0];
+  o.images.forEach((name, i) => {
+    w['load' + i] = { class_type: 'LoadImage', inputs: { image: name } };
+    w['px' + i] = { class_type: 'ImageScale', inputs: { image: ['load' + i, 0], upscale_method: 'lanczos', width: o.width, height: o.height, crop: 'center' } };
+    w['enc' + i] = { class_type: 'VAEEncode', inputs: { pixels: ['px' + i, 0], vae: ['vae', 0] } };
+    w['ref' + i] = { class_type: 'ReferenceLatent', inputs: { conditioning: cond, latent: ['enc' + i, 0] } };
+    cond = ['ref' + i, 0];
+  });
+  w.neg = { class_type: 'ConditioningZeroOut', inputs: { conditioning: cond } };
+  w.guider = { class_type: 'CFGGuider', inputs: { model: ['unet', 0], positive: cond, negative: ['neg', 0], cfg: e.cfg || 1 } };
+  w.noise = { class_type: 'RandomNoise', inputs: { noise_seed: o.seed } };
+  w.sampler = { class_type: 'KSamplerSelect', inputs: { sampler_name: 'euler' } };
+  w.sigmas = { class_type: 'Flux2Scheduler', inputs: { steps: e.steps || 4, width: o.width, height: o.height } };
+  w.latent = { class_type: 'EmptyFlux2LatentImage', inputs: { width: o.width, height: o.height, batch_size: 1 } };
+  w.sample = { class_type: 'SamplerCustomAdvanced', inputs: { noise: ['noise', 0], guider: ['guider', 0], sampler: ['sampler', 0], sigmas: ['sigmas', 0], latent_image: ['latent', 0] } };
+  w.decode = { class_type: 'VAEDecode', inputs: { samples: ['sample', 0], vae: ['vae', 0] } };
+  w.save = { class_type: 'SaveImage', inputs: { images: ['decode', 0], filename_prefix: 'atelier/edit' } };
+  return w;
+}
+
 // Редактирование по команде (Qwen-Image-Edit 2511 — аналог Nano Banana)
 function wfEdit(o) {
   const e = o.edit;
+  if (e.kind === 'flux2') return wfEditFlux2(o);
   const w = {
     unet: { class_type: 'UNETLoader', inputs: { unet_name: e.unet, weight_dtype: e.dtype || 'default' } },
     clip: { class_type: 'CLIPLoader', inputs: { clip_name: e.clip, type: 'qwen_image' } },

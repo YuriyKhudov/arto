@@ -244,11 +244,35 @@ function pngSize(buf) {
   return buf[0] === 0x89 && buf[1] === 0x50 ? [buf.readUInt32BE(16), buf.readUInt32BE(20)] : null;
 }
 
-const FIX_INSTRUCTION = 'Fix the anatomy: correct hands, fingers, limbs, joints, face and body proportions, and remove all artifacts, glitches and defects. Keep the composition, pose, colors, lighting and painting style exactly the same.';
+// Запустить ИИ-редактор на загруженных картинках. Pro — Qwen-Image-Edit, Lite — FLUX.2 klein.
+async function runEdit({ names, firstBuf, instruction, seed, prog }) {
+  const e = edition.edit;
+  const opts = {
+    images: names, instruction, seed,
+    edit: {
+      ...e,
+      unet: await model('diffusion_models', e.unet),
+      clip: await model('text_encoders', e.clip),
+      vae: await model('vae', e.vae),
+      lora: e.lora ? await model('loras', e.lora) : null,
+    },
+  };
+  if (e.kind === 'flux2') {
+    // klein понимает в основном английский; размер — ~1 Мп с пропорциями исходника, кратно 16
+    opts.instruction = await toEnglish(instruction);
+    const [w0, h0] = (firstBuf && pngSize(firstBuf)) || [1024, 1024];
+    const k = Math.sqrt(((e.megapixels || 1) * 1024 * 1024) / (w0 * h0));
+    opts.width = Math.max(256, Math.round((w0 * k) / 16) * 16);
+    opts.height = Math.max(256, Math.round((h0 * k) / 16) * 16);
+  }
+  return comfy.run(wfEdit(opts), { onProgress: prog });
+}
+
+const FIX_INSTRUCTION = 'Fix only anatomical mistakes that are already visible (malformed hands or fingers, wrong proportions, distorted face) and remove glitches and artifacts. Do not add, remove or move any objects, people or body parts. Keep the composition, pose, framing, colors, lighting and painting style exactly the same.';
 
 // Увеличение ×2: simple — просто увеличить; art — дорисовать детали на большом размере; fix — исправить анатомию и дефекты, затем увеличить
 function createUpscale(src, index, mode = 'simple') {
-  if (mode === 'fix' && !edition.edit) throw new Error('Исправление анатомии доступно только в версии Pro.');
+  if (mode === 'fix' && !edition.edit) throw new Error('ИИ-редактор не настроен. Запустите install.bat ещё раз.');
   const s = src.images[index];
   const job = baseJob('upscale', {
     variation: { jobId: src.id, index, mode },
@@ -261,16 +285,8 @@ function createUpscale(src, index, mode = 'simple') {
     const upModel = await model('upscale_models', edition.upscale);
 
     if (mode === 'fix') {
-      const e = edition.edit;
       const name = await comfy.upload(buf, `${job.id}_fix.${sniffExt(buf)}`);
-      const fixed = await comfy.run(wfEdit({
-        images: [name], instruction: FIX_INSTRUCTION, seed: s.seed || 1,
-        edit: {
-          ...e,
-          unet: await model('diffusion_models', e.unet), clip: await model('text_encoders', e.clip),
-          vae: await model('vae', e.vae), lora: e.lora ? await model('loras', e.lora) : null,
-        },
-      }), { onProgress: prog });
+      const fixed = await runEdit({ names: [name], firstBuf: buf, instruction: FIX_INSTRUCTION, seed: s.seed || 1, prog });
       buf = await keepTexture(buf, fixed, { retexture: true, prompt: s.finalPrompt || src.prompt, negative: src.negative, seed: s.seed || 1 });
     }
 
@@ -322,7 +338,7 @@ async function keepTexture(orig, edited, { retexture = false, prompt = '', negat
 
 // Изменить по команде (аналог Nano Banana)
 function createEdit({ instruction, sources, count, from, isTemp, preserve = true, quality = 'normal' }) {
-  if (!edition.edit) throw new Error('Редактирование доступно только в версии Pro.');
+  if (!edition.edit) throw new Error('ИИ-редактор не настроен. Запустите install.bat ещё раз.');
   const n = Math.max(1, Math.min(4, +count || 1));
   const seed = Math.floor(Math.random() * 2 ** 31);
   const job = baseJob('edit', {
@@ -336,18 +352,7 @@ function createEdit({ instruction, sources, count, from, isTemp, preserve = true
   let names = null;
   return startJob(job, async (img, prog) => {
     if (!names) names = await Promise.all(sources.map((buf, i) => comfy.upload(buf, `${job.id}_src${i}.${sniffExt(buf)}`)));
-    const e = edition.edit;
-    const out = await comfy.run(wfEdit({
-      images: names, instruction, seed: img.seed,
-      edit: {
-        ...e,
-        // черновик: ИИ работает на картинке вдвое меньшей площади — примерно вдвое быстрее
-        unet: await model('diffusion_models', e.unet),
-        clip: await model('text_encoders', e.clip),
-        vae: await model('vae', e.vae),
-        lora: e.lora ? await model('loras', e.lora) : null,
-      },
-    }), { onProgress: prog });
+    const out = await runEdit({ names, firstBuf: sources[0], instruction, seed: img.seed, prog });
     return preserve && sources.length === 1 ? keepTexture(sources[0], out) : out;
   });
 }

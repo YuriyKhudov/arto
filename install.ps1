@@ -1,6 +1,6 @@
 ﻿# Arto — установщик. Запускается через install.bat.
 # Сам определяет видеокарту, выбирает версию (Pro/Lite), докачивает только недостающее.
-param([string]$Edition = "", [string]$ComfyPath = "")
+param([string]$Edition = "", [string]$ComfyPath = "", [switch]$NoShortcut)
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
@@ -15,8 +15,13 @@ function Get-File($url, $dest, $what) {
   if (Test-Path $dest) { Say "   уже есть: $what" "DarkGray"; return }
   New-Item -ItemType Directory -Force (Split-Path $dest) | Out-Null
   Say "   скачиваю: $what"
-  & curl.exe -L --fail --retry 5 -C - -o "$dest.part" $url
-  if ($LASTEXITCODE -ne 0) { throw "Не удалось скачать $what" }
+  # при обрыве связи — продолжаем с того же места, до 5 попыток
+  for ($try = 1; $try -le 5; $try++) {
+    & curl.exe -L --fail --retry 5 --retry-delay 3 -C - -o "$dest.part" $url
+    if ($LASTEXITCODE -eq 0) { break }
+    if ($try -lt 5) { Say "   связь прервалась, продолжаю (попытка $($try + 1) из 5)…" "DarkYellow"; Start-Sleep -Seconds 5 }
+  }
+  if ($LASTEXITCODE -ne 0) { throw "Не удалось скачать $what. Проверьте интернет и запустите install.bat ещё раз — скачанное не пропадёт." }
   Move-Item -Force "$dest.part" $dest
 }
 
@@ -42,17 +47,18 @@ if (-not $Edition) {
   Write-Host "   Выберите версию:" -ForegroundColor Yellow
   Write-Host ""
   Write-Host "   1) LITE$($mark.lite)" -ForegroundColor Cyan
-  Write-Host "      Рисование эскизов во всех техниках, стиль с картинок, редактор с кистью и лассо."
-  Write-Host "      Без ИИ-редактирования словами. Подходит для слабых ПК и даже без видеокарты."
-  Write-Host "      Нужно: видеокарта NVIDIA от 4 ГБ (или без неё — медленно). Скачать ~10 ГБ."
+  Write-Host "      Все возможности Arto — рисование, стиль с картинок, ИИ-редактор словами,"
+  Write-Host "      исправление анатомии, редактор с кистью и лассо. Модели облегчённые:"
+  Write-Host "      картинки чуть проще и меньше (до 576 px, с увеличением ×2), зато быстро."
+  Write-Host "      Нужно: видеокарта NVIDIA от 6 ГБ, 16 ГБ оперативной памяти. Скачать ~17 ГБ."
   Write-Host ""
   Write-Host "   2) PRO$($mark.pro)" -ForegroundColor Cyan
-  Write-Host "      Всё из Lite + качество крупнее и детальнее + ИИ-редактор:"
-  Write-Host "      «измени словами», исправление анатомии, правки по выделению."
+  Write-Host "      Всё то же самое на тяжёлых моделях: картинки крупнее (1024 px),"
+  Write-Host "      детальнее и художественнее, ИИ-редактор точнее."
   Write-Host "      Нужно: видеокарта NVIDIA от 12 ГБ, 32 ГБ оперативной памяти. Скачать ~40 ГБ."
   Write-Host ""
   if ($rec -eq "lite" -and $vram -gt 0) { Say "   У вас $([math]::Round($vram/1024)) ГБ видеопамяти — Pro может работать очень медленно или не запуститься." "DarkYellow" }
-  if ($cpuOnly) { Say "   Видеокарта NVIDIA не найдена — Pro работать не будет, Lite будет рисовать на процессоре (минуты на картинку)." "DarkYellow" }
+  if ($cpuOnly) { Say "   Видеокарта NVIDIA не найдена — Pro работать не будет, Lite будет работать на процессоре (минуты на картинку)." "DarkYellow" }
   do {
     $ans = (Read-Host "   Введите 1 или 2").Trim()
   } until ($ans -in @("1", "2"))
@@ -68,10 +74,9 @@ if ($Comfy) {
   Say "   найден готовый ComfyUI: $Comfy — использую его" "Green"
 } else {
   $Comfy = "$Root\engine\ComfyUI_windows_portable"
-  $pkg = if ($cpuOnly) { "ComfyUI_windows_portable_nvidia.7z" } else { "ComfyUI_windows_portable_nvidia.7z" }
-  $rel = Invoke-RestMethod "https://api.github.com/repos/comfyanonymous/ComfyUI/releases/latest"
-  $asset = $rel.assets | Where-Object { $_.name -eq $pkg } | Select-Object -First 1
-  Get-File $asset.browser_download_url "$Root\engine\downloads\$pkg" "ComfyUI $($rel.tag_name) (~2 ГБ)"
+  $pkg = "ComfyUI_windows_portable_nvidia.7z"
+  # прямая ссылка на последний выпуск — без API GitHub и его лимитов
+  Get-File "https://github.com/comfyanonymous/ComfyUI/releases/latest/download/$pkg" "$Root\engine\downloads\$pkg" "двигатель ComfyUI (~2 ГБ)"
   Say "   распаковываю…"
   & "$env:SystemRoot\System32\tar.exe" -xf "$Root\engine\downloads\$pkg" -C "$Root\engine"
   if (-not (Test-Path "$Comfy\python_embeded\python.exe")) { throw "Не получилось распаковать ComfyUI" }
@@ -109,6 +114,10 @@ if ($Edition -eq "pro") {
 } else {
   $ckpt = Need "checkpoints" "DreamShaper8_LCM.safetensors" "$HF/Lykon/DreamShaper/resolve/main/DreamShaper8_LCM.safetensors" "художник DreamShaper 8 LCM (2 ГБ)"
   $null = Need "ipadapter" "ip-adapter-plus_sd15.safetensors" "$HF/h94/IP-Adapter/resolve/main/models/ip-adapter-plus_sd15.safetensors" "стиль с картинок для SD 1.5 (0,1 ГБ)"
+  # лёгкий ИИ-редактор: FLUX.2 klein 4B (Apache 2.0)
+  $null = Need "diffusion_models" "flux-2-klein-4b-fp8.safetensors" "$HF/black-forest-labs/FLUX.2-klein-4b-fp8/resolve/main/flux-2-klein-4b-fp8.safetensors" "ИИ-редактор FLUX.2 klein (3,9 ГБ)"
+  $null = Need "text_encoders" "qwen_3_4b.safetensors" "$HF/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors" "понимание текста для редактора (7,7 ГБ)"
+  $null = Need "vae" "flux2-vae.safetensors" "$HF/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/main/split_files/vae/flux2-vae.safetensors" "VAE редактора (0,3 ГБ)"
 }
 $null = Need "clip_vision" "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors" "$HF/h94/IP-Adapter/resolve/main/models/image_encoder/model.safetensors" "зрение для стиля с картинок (2,5 ГБ)"
 
@@ -138,7 +147,8 @@ $libOk = { Test-Path "$Root\node_modules\@huggingface\transformers\package.json"
 for ($try = 1; $try -le 3 -and -not (& $libOk); $try++) {
   Say "   ставлю библиотеки программы (попытка $try)…"
   $ErrorActionPreference = "Continue"
-  & "$Root\runtime\npm.cmd" install --omit=dev --ignore-scripts --no-audit --no-fund *>&1 | Tee-Object -FilePath "$Root\data\install-npm.log"
+  # через cmd — чтобы безобидные предупреждения npm не выглядели как красные ошибки PowerShell
+  & cmd.exe /c "cd /d `"$Root`" && `"$Root\runtime\npm.cmd`" install --omit=dev --ignore-scripts --no-audit --no-fund 2>&1" | Tee-Object -FilePath "$Root\data\install-npm.log"
   $ErrorActionPreference = "Stop"
 }
 if (-not (& $libOk)) { throw "Не удалось установить библиотеки программы. Проверьте интернет и запустите install.bat ещё раз. Подробности: data\install-npm.log" }
@@ -159,12 +169,14 @@ if ($Edition -eq "pro" -and $editCfg.lora) {
 [System.IO.File]::WriteAllText("$Root\data\local.json", ($local | ConvertTo-Json -Depth 8), [System.Text.UTF8Encoding]::new($false))
 
 # ---------- 6. Ярлык ----------
+if (-not $NoShortcut) {
 $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\Arto.lnk")
 $lnk.TargetPath = "$Root\start.bat"
 $lnk.WorkingDirectory = $Root
 $lnk.IconLocation = "$Root\public\atelier.ico"
 $lnk.WindowStyle = 7
 $lnk.Save()
+}
 
 Write-Host ""
 Write-Host "   Готово! На рабочем столе появился ярлык «Arto»." -ForegroundColor Green

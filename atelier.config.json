@@ -43,11 +43,19 @@
         "scheduler": "sgm_uniform"
       },
       "upscale": "RealESRGAN_x2plus.pth",
-      "edit": null,
+      "edit": {
+        "kind": "flux2",
+        "unet": "flux-2-klein-4b-fp8.safetensors",
+        "clip": "qwen_3_4b.safetensors",
+        "vae": "flux2-vae.safetensors",
+        "steps": 4,
+        "cfg": 1,
+        "megapixels": 1
+      },
       "styleRef": {
         "ipadapter": "ip-adapter-plus_sd15.safetensors",
         "clipVision": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors",
-        "weightType": "linear"
+        "weightType": "weak input"
       }
     }
   },
