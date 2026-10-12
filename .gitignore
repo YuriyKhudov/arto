@@ -1,10 +1,10 @@
 # работы и личные настройки пользователя
-data/
+/data/
 # большие файлы — ставятся установщиком
-models/
-node_modules/
-runtime/
-engine/
+/models/
+/node_modules/
+/runtime/
+/engine/
 .claude/
 *.log
-dist/
+/dist/
