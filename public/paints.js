@@ -5,8 +5,12 @@ const Paints = (() => {
   let seriesId = localStorage.getItem('arto.paintSeries') || 'master-class-oil';
   let img = null; // картинка в модальном окне
   let rows = []; // [{ target: [r,g,b], picked }]
+  let mine = {}; // { seriesId: ['101', '218', …] } — палитра мастерской
+  let onlyMine = localStorage.getItem('arto.onlyMine') === '1';
 
   // ---------- цвет ----------
+  const key = (c) => c.num || c.name;
+  const label = (c) => (c.num ? `№ ${c.num} ` : '') + c.name;
   const hexToRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
   const toHex = (c) => '#' + c.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
   const lin = (v) => { v /= 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
@@ -47,8 +51,8 @@ const Paints = (() => {
     const BASIC = /белила|кадмий|охра|сиена|умбра|ультрамарин|кобальт синий|церулеум|берлинская|изумрудная зелёная|окись хрома|краплак|марс чёрный|сажа|кость|серая пейна|индиго|неаполитанская жёлтая|английская красная|венецианская красная|сепия|ван-дик|лимонная|кармин|алая|зелень соковая/i;
     const EXOTIC = /туманност|тени|неон|пион|кварц|магнолия|мечта|туф|дюны|мокко|маррон|гранит|порфирит|шпинель/i;
     base.forEach((c) => { c.cost = BASIC.test(c.name) ? 0 : EXOTIC.test(c.name) ? 3 : 1; });
-    const isWhite = (c) => /^10[01]$/.test(c.num);
-    const white = base.find((c) => c.num === '101') || base.find(isWhite);
+    const isWhite = (c) => /^10[01]$/.test(c.num) || /белил/i.test(c.name);
+    const white = base.find((c) => c.num === '101') || base.find((c) => /белила титан/i.test(c.name)) || base.find(isWhite);
     const paper = { log: [0.9, 0.89, 0.86].map(Math.log) }; // белая бумага для акварели
     return { series, paints: base.filter((c) => !isWhite(c)), lighten: series.kind === 'oil' ? white : paper };
   }
@@ -150,17 +154,22 @@ const Paints = (() => {
 
   function render() {
     const series = data.series.find((s) => s.id === seriesId) || data.series[0];
-    const P = prepare(series);
+    const owned = new Set(mine[series.id] || []);
+    const useMine = onlyMine && owned.size >= 2;
+    const P = prepare(useMine ? { ...series, colors: series.colors.filter((c) => owned.has(key(c)) || /^10[01]$/.test(c.num) || /белил/i.test(c.name)) } : series);
+    $('#pnOnly').checked = onlyMine;
+    $('#pnOnly').parentElement.title = owned.size ? `Отмечено тюбиков: ${owned.size}` : 'Сначала отметьте свои тюбики';
+    $('#pnMine').textContent = owned.size ? `Мои тюбики (${owned.size})` : 'Мои тюбики…';
     $('#pnSeries').innerHTML = data.series.map((s) => `<button data-s="${s.id}" class="${s.id === series.id ? 'on' : ''}">${esc(s.title)}</button>`).join('');
     const buy = new Map();
     $('#pnRows').innerHTML = rows.map((r, i) => {
       const rec = bestRecipe(r.target, P);
-      rec.items.forEach((it) => buy.set(it.paint.num, it.paint));
-      if (rec.t && series.kind === 'oil') buy.set(P.lighten.num, P.lighten);
+      rec.items.forEach((it) => buy.set(key(it.paint), it.paint));
+      if (rec.t && series.kind === 'oil') buy.set(key(P.lighten), P.lighten);
       const recipe = rec.items.map((it) => `
         <div class="pn-paint">
           <i style="background:${it.paint.mass}"></i>
-          <div><b>№ ${it.paint.num} ${esc(it.paint.name)}</b><small>${esc(it.paint.en)}</small></div>
+          <div><b>${esc(label(it.paint))}</b><small>${esc(it.paint.en)}</small></div>
           ${rec.items.length > 1 ? `<span class="pn-parts">${it.n} ${partsWord(it.n)}</span>` : ''}
         </div>`).join('');
       const light = lightWord(series.kind, rec.t);
@@ -170,21 +179,23 @@ const Paints = (() => {
         </div>
         <div class="pn-recipe">
           ${recipe}
-          ${light ? `<div class="pn-light">+ ${light}${series.kind === 'oil' ? ` <small>(№ ${P.lighten.num} ${esc(P.lighten.name)})</small>` : ''}</div>` : ''}
+          ${light ? `<div class="pn-light">+ ${light}${series.kind === 'oil' ? ` <small>(${esc(label(P.lighten))})</small>` : ''}</div>` : ''}
           <div class="pn-meta">${similarity(rec.d)}${r.picked ? ' · выбрано пипеткой' : r.share ? ` · ${Math.round(r.share * 100)}% картинки` : ''}</div>
         </div>
         <button class="pn-x" data-rm="${i}" title="Убрать">×</button>
       </div>`;
     }).join('') || '<p class="muted">Нажмите на картинку, чтобы подобрать цвет.</p>';
-    const list = [...buy.values()].sort((a, b) => +a.num - +b.num);
+    const list = [...buy.values()].sort((a, b) => (+a.num || 9999) - (+b.num || 9999) || a.name.localeCompare(b.name, 'ru'));
     $('#pnBuy').innerHTML = list.length
-      ? `<b>Понадобятся тюбики (${list.length}):</b> ` + list.map((p) => `<span class="pn-tube"><i style="background:${p.mass}"></i>№ ${p.num} ${esc(p.name)}</span>`).join('')
+      ? `<b>Понадобятся тюбики (${list.length}):</b> ` + list.map((p) => `<span class="pn-tube"><i style="background:${p.mass}"></i>${esc(label(p))}</span>`).join('')
       : '';
-    $('#pnBuy').dataset.text = list.map((p) => `№ ${p.num} ${p.name}`).join('\n');
+    $('#pnBuy').dataset.text = list.map((p) => series.title + ': ' + label(p)).join('\n');
   }
 
   async function open(src) {
     if (!data) data = await (await fetch('data/paints.json')).json();
+    try { mine = await (await fetch('/api/mypaints')).json(); } catch { mine = {}; }
+    $('#pnMineBox').hidden = true;
     img = new Image();
     img.src = src;
     await img.decode();
@@ -221,7 +232,40 @@ const Paints = (() => {
       seriesId = b.dataset.s;
       try { localStorage.setItem('arto.paintSeries', seriesId); } catch {}
       render();
+      if (!$('#pnMineBox').hidden) $('#pnMine').click();
     };
+    $('#pnOnly').onchange = (e) => {
+      const series = data.series.find((s) => s.id === seriesId) || data.series[0];
+      if (e.target.checked && (mine[series.id] || []).length < 2) {
+        e.target.checked = false;
+        window.toast?.('Сначала отметьте хотя бы 2 своих тюбика — кнопка «Мои тюбики»', true);
+        return;
+      }
+      onlyMine = e.target.checked;
+      try { localStorage.setItem('arto.onlyMine', onlyMine ? '1' : '0'); } catch {}
+      render();
+    };
+    // список всех тюбиков серии с галочками
+    const renderMine = () => {
+      const series = data.series.find((s) => s.id === seriesId) || data.series[0];
+      const owned = new Set(mine[series.id] || []);
+      const q = ($('#pnMineSearch').value || '').toLowerCase();
+      $('#pnMineList').innerHTML = series.colors
+        .filter((c) => !q || (label(c) + ' ' + c.en).toLowerCase().includes(q))
+        .map((c) => `<label class="pn-m"><input type="checkbox" data-n="${esc(key(c))}" ${owned.has(key(c)) ? 'checked' : ''}><i style="background:${c.mass}"></i><span>${esc(label(c))}</span></label>`).join('');
+    };
+    $('#pnMine').onclick = () => { $('#pnMineBox').hidden = false; $('#pnMineSearch').value = ''; renderMine(); };
+    $('#pnMineSearch').oninput = renderMine;
+    $('#pnMineList').onchange = async (e) => {
+      const n = e.target.dataset.n;
+      if (!n) return;
+      const series = data.series.find((s) => s.id === seriesId) || data.series[0];
+      const set = new Set(mine[series.id] || []);
+      e.target.checked ? set.add(n) : set.delete(n);
+      mine[series.id] = [...set];
+      await fetch('/api/mypaints', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ series: series.id, nums: mine[series.id] }) });
+    };
+    $('#pnMineDone').onclick = () => { $('#pnMineBox').hidden = true; render(); };
     $('#pnRows').onclick = (e) => { const b = e.target.closest('[data-rm]'); if (b) { rows.splice(+b.dataset.rm, 1); render(); } };
     $('#pnCopy').onclick = async () => {
       const t = $('#pnBuy').dataset.text;

@@ -19,12 +19,13 @@ const EXAMPLES = [
   'натюрморт с гранатами и медным кувшином',
   'заброшенная оранжерея, заросшая лианами',
 ];
-const KIND = { upscale: 'Увеличено ×2', edit: 'Изменение', studio: 'Из редактора' };
+const KIND = { upscale: 'Увеличено ×2', edit: 'Изменение', studio: 'Из редактора', outpaint: 'Раскрытый кадр', train: 'Обучение манеры' };
 
 const state = {
   styles: [], edition: {}, engine: {}, jobs: [],
   params: load('atelier.params', DEFAULT_PARAMS),
   mode: 'draw', ref: null, sources: [], editCount: 1, editQuality: 'normal',
+  control: null, // набросок: { url, data | jobId+index | file, mode, strength }
   styleRefs: [], myStyles: [], // образцы стиля: { url, data | jobId+index | file, w }
   page: 'create', galFilter: 'all', galQuery: '',
   lb: { list: [], i: 0 },
@@ -70,7 +71,10 @@ async function init() {
   Editor.bindUI();
   Editor.loadTools();
   loadMyStyles();
+  loadMyLoras();
   Paints.bind();
+  bindBoards();
+  bindTrain();
   bindPrompts();
   buildControls();
   renderExamples();
@@ -94,6 +98,7 @@ async function tick() {
       const fresh = await api('/api/jobs/' + j.id);
       const i = state.jobs.findIndex((x) => x.id === j.id);
       if (i !== -1) state.jobs[i] = fresh;
+      if (fresh.type === 'train' && fresh.status === 'done') { loadMyLoras(); toast('Манера «' + (fresh.trainName || '') + '» готова — выберите её в окне «Стиль»'); }
       if (fresh.status === 'error') toast('Не получилось: ' + (fresh.images.find((x) => x.error)?.error || ''), true);
       if (fresh.status === 'cancelled') { state.jobs = state.jobs.filter((x) => x.id !== j.id); toast('Отменено'); }
     } catch {}
@@ -158,6 +163,7 @@ const LEVELS = {
   chaos: (v) => (v === 0 ? 'нет' : v < 35 ? 'немного' : v < 70 ? 'заметно' : 'сильно'),
   weird: (v) => (v === 0 ? 'нет' : v < 800 ? 'чуть-чуть' : v < 1800 ? 'заметно' : 'очень'),
   iw: (v) => (v < 0.7 ? 'слабо' : v < 1.4 ? 'средне' : 'сильно'),
+  sk: (v) => (v < 0.55 ? 'свободно' : v < 0.85 ? 'средне' : v < 1.1 ? 'точно' : 'очень точно'),
   sw: (v) => (v < 0.4 ? 'намёк' : v < 0.9 ? 'мягко' : v < 1.4 ? 'заметно' : 'сильно'),
 };
 
@@ -177,6 +183,7 @@ function syncControls() {
   $('#iwWrap').style.display = state.ref ? '' : 'none';
   renderRef();
   renderStyleRefs();
+  renderSketch();
 }
 
 function setMode(mode) {
@@ -189,9 +196,11 @@ function setMode(mode) {
   $('#sources').hidden = !edit;
   $('#refBtn').hidden = edit;
   $('#styleBtn').hidden = edit;
+  $('#sketchBtn').hidden = edit;
+  if (edit) $('#sketchTray').hidden = true;
   if (edit) $('#styleTray').hidden = true;
   $('#goBtn').textContent = edit ? 'Изменить' : 'Нарисовать';
-  $('#prompt').placeholder = edit ? 'Что изменить? Например: сделай ночь, а в окне — тёплый свет' : 'Опишите, что нарисовать…';
+  $('#prompt').placeholder = edit ? 'Что изменить? Например: сделай ночь, а в окне — тёплый свет' : 'Опишите, что нарисовать…   (Shift+Enter — новая строка: несколько строк = серия)';
   renderRef();
   renderSources();
 }
@@ -222,6 +231,101 @@ function renderSources() {
   const inp = $('#srcInput');
   if (inp) inp.onchange = (e) => { const f = e.target.files[0]; if (f) addImage(f); };
 }
+
+// ---------------- «моя манера» (обученная LoRA) ----------------
+async function loadMyLoras() {
+  try { state.myLoras = await api('/api/loras'); } catch { state.myLoras = []; }
+  const cur = $('#myLora').value;
+  $('#myLora').innerHTML = '<option value="">— нет —</option>' + state.myLoras.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('')
+    + (state.myLoras.length ? '<option value="__del">— удалить манеру…</option>' : '');
+  if (state.myLoras.some((l) => l.id === cur)) $('#myLora').value = cur;
+  $('#myLoraPowerWrap').hidden = !$('#myLora').value;
+}
+const myLoraParam = () => ($('#myLora').value ? { id: $('#myLora').value, w: +$('#myLoraPower').value } : null);
+
+function bindTrain() {
+  let files = [];
+  let source = 'files';
+  let quality = 'normal';
+  $('#myLora').onchange = async (e) => {
+    if (e.target.value === '__del') {
+      e.target.value = '';
+      const list = state.myLoras.map((l, i) => (i + 1) + '. ' + l.name).join('\n');
+      const l = state.myLoras[+prompt('Какую манеру удалить? Введите номер:\n' + list) - 1];
+      if (l && confirm('Удалить манеру «' + l.name + '»?')) { await api('/api/loras/' + l.id, null, 'DELETE'); await loadMyLoras(); }
+    }
+    $('#myLoraPowerWrap').hidden = !e.target.value;
+    if (e.target.value) $('#styleBtn').classList.add('on');
+  };
+  $('#trainOpen').onclick = async () => {
+    files = [];
+    $('#trCount').textContent = '';
+    $('#trName').value = '';
+    try { const b = await api('/api/boards'); $('#trBoard').innerHTML = b.map((x) => `<option value="${x.id}">${esc(x.name)} (${x.items.length})</option>`).join('') || '<option value="">досок нет</option>'; } catch {}
+    $('#trainBox').hidden = false;
+  };
+  $('#trSource').onclick = (e) => {
+    const b = e.target.closest('[data-v]');
+    if (!b) return;
+    source = b.dataset.v;
+    $$('#trSource button').forEach((x) => x.classList.toggle('on', x === b));
+    $('#trFilesWrap').hidden = source !== 'files';
+    $('#trBoardWrap').hidden = source !== 'board';
+  };
+  $('#trQuality').onclick = (e) => {
+    const b = e.target.closest('[data-v]');
+    if (!b) return;
+    quality = b.dataset.v;
+    $$('#trQuality button').forEach((x) => x.classList.toggle('on', x === b));
+  };
+  $('#trFiles').onchange = async (e) => {
+    files = [];
+    for (const f of [...e.target.files].slice(0, 60)) files.push(await blobToDataUrl(f, 1280));
+    $('#trCount').textContent = `выбрано: ${files.length}` + (files.length < 15 ? ' (лучше 15–30)' : '');
+  };
+  $('#trCancel').onclick = () => ($('#trainBox').hidden = true);
+  $('#trGo').onclick = async () => {
+    const name = $('#trName').value.trim() || 'Моя манера';
+    const body = { name, quality, ...(source === 'board' ? { boardId: $('#trBoard').value } : { images: files }) };
+    try {
+      $('#trGo').disabled = true;
+      const job = await api('/api/train', body);
+      $('#trainBox').hidden = true;
+      addJob(job);
+      toast('Обучение началось — следите за прогрессом в ленте');
+    } catch (e) { toast(e.message, true); }
+    $('#trGo').disabled = false;
+  };
+}
+
+// ---------------- набросок / контур с фото ----------------
+function renderSketch() {
+  const c = state.control;
+  $('#sketchBadge').hidden = !c;
+  $('#sketchBtn').classList.toggle('on', !!c || !$('#sketchTray').hidden);
+  const mode = c?.mode || state.sketchMode || 'sketch';
+  $$('#sketchMode button').forEach((b) => b.classList.toggle('on', b.dataset.m === mode));
+  const power = c?.strength ?? 0.8;
+  $('#sketchPower').value = power;
+  $('#vSketch').textContent = LEVELS.sk(power);
+  $('#sketchSlot').innerHTML = c
+    ? `<div class="src sk-img"><img src="${c.url}" alt=""><button id="sketchRm" title="Убрать">×</button></div>`
+    : `<label class="src add sk-img"><input type="file" accept="image/*" hidden id="sketchInput"><span>+</span><small>набросок или фото</small></label>`;
+  if ($('#sketchRm')) $('#sketchRm').onclick = () => { state.control = null; renderSketch(); };
+  if ($('#sketchInput')) $('#sketchInput').onchange = async (e) => { const f = e.target.files[0]; if (f) setControl({ url: await blobToDataUrl(f, 1536) }); };
+}
+
+function setControl(c) {
+  if (!c.file && c.jobId == null) c.data = c.url;
+  state.control = { mode: state.sketchMode || 'sketch', strength: 0.8, ...state.control, ...c };
+  $('#sketchTray').hidden = false;
+  renderSketch();
+}
+
+const controlPayload = () => state.control && ({
+  mode: state.control.mode, strength: state.control.strength,
+  ...(state.control.file ? { file: state.control.file } : state.control.jobId != null ? { jobId: state.control.jobId, index: state.control.index } : { data: state.control.data }),
+});
 
 // ---------------- стиль с картинок (аналог --sref) ----------------
 function renderStyleRefs() {
@@ -290,6 +394,8 @@ async function addImage(blob) {
     if (state.sources.length >= 3) return toast('Можно не больше трёх картинок', true);
     state.sources.push({ url, data: url });
     renderSources();
+  } else if (!$('#sketchTray').hidden) {
+    setControl({ url: await blobToDataUrl(blob, 1536), jobId: undefined, file: undefined });
   } else if (!$('#styleTray').hidden) {
     addStyleRef({ url: await blobToDataUrl(blob, 1024) });
   } else {
@@ -321,7 +427,21 @@ async function go() {
       if (!state.sources.length) { toast('Сначала добавьте картинку', true); btn.disabled = false; return; }
       job = await api('/api/edit', { instruction: text, count: state.editCount, quality: state.editQuality, sources: state.sources.map((s) => s.ref || s.data) });
     } else {
-      job = await api('/api/imagine', { prompt: text, params: state.params, ref: state.ref, styles: styleRefPayload() });
+      const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+      if (lines.length > 1 && confirm(`Сделать серию из ${lines.length} сюжетов в одном стиле?\n\nУ всех будут одинаковые техника, формат, стиль и «зерно» — как цикл работ.`)) {
+        const seriesSeed = Math.floor(Math.random() * 2 ** 31);
+        const seriesId = Date.now().toString(36);
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const j = await api('/api/imagine', { prompt: lines[i], params: { ...state.params, myLora: myLoraParam(), seed: seriesSeed, series: { id: seriesId, n: i + 1, of: lines.length } }, ref: state.ref, styles: styleRefPayload(), control: controlPayload() });
+          addJob(j);
+        }
+        $('#prompt').value = '';
+        autosize();
+        btn.disabled = false;
+        toast(`Серия из ${lines.length} работ поставлена в очередь`);
+        return;
+      }
+      job = await api('/api/imagine', { prompt: text, params: { ...state.params, myLora: myLoraParam() }, ref: state.ref, styles: styleRefPayload(), control: controlPayload() });
     }
     addJob(job);
     $('#prompt').value = '';
@@ -331,6 +451,10 @@ async function go() {
 }
 
 async function action(act, job, index) {
+  if (act.startsWith('out-ar:')) {
+    try { addJob(await api('/api/outpaint', { jobId: job.id, index, mode: 'ar', ar: act.slice(7) })); closeLightbox(); } catch (e) { toast(e.message, true); }
+    return;
+  }
   try {
     switch (act) {
       case 'vary-subtle':
@@ -340,6 +464,12 @@ async function action(act, job, index) {
       case 'cancel':
         await api('/api/jobs/' + job.id + '/cancel', {});
         toast('Отменяю…');
+        return;
+      case 'out-wide': case 'out-tall': case 'out-all': // два варианта: «спокойно» и «с деталями»
+        addJob(await api('/api/outpaint', { jobId: job.id, index, mode: act.slice(4), amount: 0.45 }));
+        break;
+      case 'to-board':
+        openBoardPick(job, index);
         return;
       case 'save-prompt':
         openSavePrompt(job);
@@ -372,12 +502,22 @@ async function action(act, job, index) {
         closeLightbox();
         setMode(job.type === 'edit' ? 'edit' : 'draw');
         $('#prompt').value = job.rawPrompt || job.prompt;
+        if (job.control) { state.control = { url: '/images/' + job.control.file, file: job.control.file, mode: job.control.mode, strength: job.control.strength }; $('#sketchTray').hidden = false; }
         if (job.styleFiles?.length) {
           state.styleRefs = job.styleFiles.map((f, i) => ({ url: '/images/' + f, file: f, w: job.styleWeights?.[i] ?? 1 }));
           $('#styleTray').hidden = false;
           syncControls();
         }
         autosize();
+        $('#prompt').focus();
+        return;
+      case 'as-sketch':
+        closeLightbox();
+        setMode('draw');
+        state.sketchMode = 'photo';
+        state.control = null;
+        setControl({ url: '/images/' + job.images[index].file, jobId: job.id, index, mode: 'photo' });
+        $('main').scrollTo({ top: 0, behavior: 'smooth' });
         $('#prompt').focus();
         return;
       case 'as-style':
@@ -472,6 +612,7 @@ const formatName = (ar) => FORMATS.find((f) => f.ar === ar)?.name || ar;
 
 function chipsHTML(job) {
   if (job.type === 'studio') return '';
+  if (job.type === 'train') return `<span class="chip">${job.sources?.length || ''} образцов · ${job.params.steps} шагов</span>`;
   if (job.type === 'edit') return `<span class="chip">${job.sources?.length > 1 ? 'из ' + job.sources.length + ' картинок' : 'по картинке'}</span>${job.params?.quality === 'draft' ? '<span class="chip">черновик</span>' : ''}`;
   const p = job.params;
   const chips = [styleName(p.style), formatName(p.ar || '1:1')];
@@ -481,11 +622,14 @@ function chipsHTML(job) {
   if (+p.weird) chips.push('странность: ' + LEVELS.weird(+p.weird));
   if (p.no) chips.push('без: ' + p.no);
   if (job.usedReference) chips.push('от картинки');
+  if (job.control) chips.push(job.control.mode === 'photo' ? 'по контуру фото' : 'по наброску');
+  if (p.myLora) { const ml = (state.myLoras || []).find((x) => x.id === p.myLora.id); chips.push('манера: ' + (ml ? ml.name : '—')); }
+  if (p.series) chips.unshift(`серия ${p.series.n}/${p.series.of}`);
   return chips.map((c) => `<span class="chip">${esc(c)}</span>`).join('');
 }
 
 function cellHTML(job, img, i) {
-  const fixed = job.type === 'imagine' || job.type === 'variation';
+  const fixed = job.type === 'imagine' || job.type === 'variation' || job.type === 'outpaint';
   const ratio = fixed ? `style="aspect-ratio:${job.params.width}/${job.params.height}"` : '';
   if (img.file) {
     return `<div class="cell" data-i="${i}" ${ratio}>
@@ -502,16 +646,16 @@ function cellHTML(job, img, i) {
   if (img.cancelled) return `<div class="cell gone" ${ratio}>отменено</div>`;
   if (img.error) return `<div class="cell failed" ${ratio} title="${esc(img.error)}"><b>Не получилось</b><small>${esc(img.error.slice(0, 140))}</small></div>`;
   if (img.deleted) return `<div class="cell gone" ${ratio}>удалено</div>`;
-  return `<div class="cell pending" data-p="${i}" ${ratio || 'style="aspect-ratio:1"'}>${progressHTML(img.progress)}</div>`;
+  return `<div class="cell pending" data-p="${i}" ${ratio || 'style="aspect-ratio:1"'}>${progressHTML(img.progress, job.type)}</div>`;
 }
 
 // Шкала прогресса: этап, проценты, сколько осталось
-const STAGES = { queued: 'в очереди', loading: 'готовлюсь', model: 'загружаю модель', drawing: 'рисую' };
-function progressHTML(p) {
+const STAGES = { queued: 'в очереди', starting: 'запускаю двигатель', loading: 'готовлюсь', model: 'загружаю модель', drawing: 'рисую' };
+function progressHTML(p, kind) {
   p = p || { stage: 'queued', pct: 0 };
   const eta = p.slow ? 'до минуты' : p.eta ? (p.eta >= 60 ? `~${Math.floor(p.eta / 60)} мин ${p.eta % 60} с` : `~${p.eta} с`) : '';
   return `<div class="prog">
-      <span class="prog-stage">${STAGES[p.stage] || 'рисую'}</span>
+      <span class="prog-stage">${kind === 'train' && p.stage === 'drawing' ? 'обучаю' : STAGES[p.stage] || 'рисую'}</span>
       <div class="prog-bar"><i style="width:${p.pct || 0}%"></i></div>
       <span class="prog-num"><b>${p.pct || 0}%</b>${eta ? ' · ' + eta : ''}</span>
     </div>`;
@@ -523,7 +667,7 @@ function updateProgress(job) {
   if (!node) return;
   job.images.forEach((img, i) => {
     const cell = node.querySelector(`.cell.pending[data-p="${i}"]`);
-    if (cell) cell.innerHTML = progressHTML(img.progress);
+    if (cell) cell.innerHTML = progressHTML(img.progress, job.type);
   });
   const done = job.images.filter((i) => i.file || i.error).length;
   const t = node.querySelector('.time');
@@ -669,6 +813,129 @@ function lbStep(d) {
   renderLightbox();
 }
 
+// ---------------- доски настроения ----------------
+let boards = [];
+let pickFor = null;
+
+async function loadBoards() {
+  try { boards = await api('/api/boards'); } catch (e) { return toast(e.message, true); }
+  renderBoards();
+}
+
+function renderBoards() {
+  const b = boards.find((x) => x.id === state.board);
+  if (!b) {
+    $('#bdTitle').textContent = 'Доски настроения';
+    $('#bdActions').innerHTML = '<button class="btn primary" data-bd="new">+ Новая доска</button>';
+    $('#bdBody').innerHTML = boards.length
+      ? '<div class="bd-grid">' + boards.map((x) => `<button class="bd-card" data-open="${x.id}">
+          <div class="bd-cover">${x.items.slice(0, 4).map((it) => `<img src="/images/${esc(it.file)}" alt="" loading="lazy">`).join('') || '<span>пусто</span>'}</div>
+          <b>${esc(x.name)}</b><small>${x.items.length} ${x.items.length === 1 ? 'картинка' : x.items.length < 5 ? 'картинки' : 'картинок'}</small></button>`).join('') + '</div>'
+      : '<div class="empty small"><p>Соберите удачные работы в подборки: «Осенний цикл», «Портреты»…<br>Создайте доску, а потом в окне просмотра любой работы нажмите «На доску».</p></div>';
+    return;
+  }
+  $('#bdTitle').innerHTML = `<button class="link-btn" data-bd="back">← Доски</button> <span contenteditable="true" spellcheck="false" class="bd-name" title="Нажмите, чтобы переименовать">${esc(b.name)}</span>`;
+  $('#bdActions').innerHTML = '<button class="btn" data-bd="collage">Скачать коллажем</button><button class="btn danger" data-bd="del">Удалить доску</button>';
+  $('#bdBody').innerHTML = b.items.length
+    ? '<div class="bd-wall">' + b.items.map((it, i) => `<figure class="bd-item" data-i="${i}">
+        <img src="/images/${esc(it.file)}" alt="" loading="lazy">
+        <button class="bd-x" data-rm="${i}" title="Убрать с доски">×</button>
+        <figcaption contenteditable="true" spellcheck="false" data-note="${i}" data-ph="добавить заметку…">${esc(it.note)}</figcaption></figure>`).join('') + '</div>'
+    : '<div class="empty small"><p>Доска пуста. Откройте любую работу и нажмите «На доску».</p></div>';
+}
+
+async function collage(b) {
+  // лист-коллаж: картинки рядами по 4, с названием доски
+  const imgs = await Promise.all(b.items.map((it) => new Promise((ok) => { const im = new Image(); im.onload = () => ok(im); im.onerror = () => ok(null); im.src = '/images/' + it.file; })));
+  const list = imgs.filter(Boolean);
+  if (!list.length) return toast('Доска пуста', true);
+  const cols = Math.min(4, list.length), cw = 480, gap = 16, head = 90;
+  const rows = [];
+  for (let i = 0; i < list.length; i += cols) rows.push(list.slice(i, i + cols));
+  const rowH = rows.map((r) => Math.min(...r.map((im) => (cw * im.naturalHeight) / im.naturalWidth)));
+  const W = cols * cw + (cols + 1) * gap, H = head + rowH.reduce((a, h) => a + h + gap, gap);
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  g.fillStyle = '#121214'; g.fillRect(0, 0, W, H);
+  g.fillStyle = '#ecebe8'; g.font = '600 40px Georgia, serif'; g.fillText(b.name, gap * 2, 58);
+  let y = head;
+  rows.forEach((r, ri) => {
+    r.forEach((im, ci) => {
+      const h = rowH[ri], x = gap + ci * (cw + gap);
+      const s = Math.max(cw / im.naturalWidth, h / im.naturalHeight);
+      const sw = cw / s, sh = h / s;
+      g.drawImage(im, (im.naturalWidth - sw) / 2, (im.naturalHeight - sh) / 2, sw, sh, x, y, cw, h);
+    });
+    y += rowH[ri] + gap;
+  });
+  const a = document.createElement('a');
+  a.href = c.toDataURL('image/jpeg', 0.92);
+  a.download = 'arto_doska_' + b.name.replace(/[^\p{L}\p{N}]+/gu, '_') + '.jpg';
+  a.click();
+}
+
+async function openBoardPick(job, index) {
+  pickFor = { jobId: job.id, index };
+  try { boards = await api('/api/boards'); } catch {}
+  $('#bpList').innerHTML = boards.map((b) => `<button class="btn" data-pick="${b.id}">${esc(b.name)} <small>${b.items.length}</small></button>`).join('') || '<p class="muted">Досок пока нет — создайте первую.</p>';
+  $('#bpNew').value = '';
+  $('#boardPick').hidden = false;
+}
+
+function bindBoards() {
+  const add = async (boardId) => {
+    try { await api('/api/boards/' + boardId + '/items', pickFor); $('#boardPick').hidden = true; toast('Добавлено на доску'); } catch (e) { toast(e.message, true); }
+  };
+  $('#bpList').onclick = (e) => { const b = e.target.closest('[data-pick]'); if (b) add(b.dataset.pick); };
+  $('#bpCreate').onclick = async () => {
+    const name = $('#bpNew').value.trim() || 'Новая доска';
+    const b = await api('/api/boards', { name });
+    add(b.id);
+  };
+  $('#bpCancel').onclick = () => ($('#boardPick').hidden = true);
+  $('#boardPick').addEventListener('click', (e) => { if (e.target.id === 'boardPick') $('#boardPick').hidden = true; });
+
+  $('#page-boards').addEventListener('click', async (e) => {
+    const open = e.target.closest('[data-open]');
+    if (open) { state.board = open.dataset.open; renderBoards(); return; }
+    const a = e.target.closest('[data-bd]');
+    const b = boards.find((x) => x.id === state.board);
+    if (a?.dataset.bd === 'new') {
+      const name = prompt('Название доски', 'Новая доска');
+      if (!name) return;
+      const nb = await api('/api/boards', { name });
+      boards.unshift(nb); state.board = nb.id; renderBoards();
+    }
+    if (a?.dataset.bd === 'back') { state.board = null; renderBoards(); }
+    if (a?.dataset.bd === 'collage' && b) collage(b);
+    if (a?.dataset.bd === 'del' && b && confirm('Удалить доску «' + b.name + '»? Работы в ленте останутся.')) {
+      await api('/api/boards/' + b.id, null, 'DELETE'); state.board = null; loadBoards();
+    }
+    const rm = e.target.closest('[data-rm]');
+    if (rm && b) { const nb = await api('/api/boards/' + b.id + '/items/' + rm.dataset.rm, null, 'DELETE'); Object.assign(b, nb); renderBoards(); }
+    const fig = e.target.closest('.bd-item');
+    if (fig && e.target.tagName === 'IMG' && b) {
+      const it = b.items[+fig.dataset.i];
+      const job = it.from && state.jobs.find((j) => j.id === it.from.jobId);
+      if (job) openLightbox(allImages(), job, it.from.index);
+    }
+  });
+  $('#page-boards').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.target.classList.contains('bd-name') || e.target.dataset.note != null)) { e.preventDefault(); e.target.blur(); } });
+  $('#page-boards').addEventListener('focusout', async (e) => {
+    const b = boards.find((x) => x.id === state.board);
+    if (!b) return;
+    if (e.target.classList.contains('bd-name')) {
+      const n = e.target.textContent.trim();
+      if (n && n !== b.name) { b.name = n; await api('/api/boards/' + b.id, { name: n }, 'PATCH'); }
+    }
+    if (e.target.dataset.note != null) {
+      const i = +e.target.dataset.note;
+      const t = e.target.textContent.trim();
+      if (t !== b.items[i].note) { b.items[i].note = t; await api('/api/boards/' + b.id + '/items/' + i, { note: t }, 'PATCH'); }
+    }
+  });
+}
+
 // ---------------- «Мои промпты» ----------------
 let prompts = [];
 let saveFor = null;
@@ -766,6 +1033,7 @@ function showPage(page) {
   $$('.page').forEach((p) => (p.hidden = p.id !== 'page-' + page));
   if (page === 'gallery') renderGallery();
   if (page === 'prompts') loadPrompts();
+  if (page === 'boards') { state.board = null; loadBoards(); }
 }
 
 function renderExamples() {
@@ -845,7 +1113,39 @@ function bindEvents() {
     $('#' + k).addEventListener('input', (e) => { state.params[k] = +e.target.value; saveParams(); syncControls(); });
   }
   $('#no').addEventListener('input', (e) => { state.params.no = e.target.value; saveParams(); });
-  $('#styleBtn').onclick = () => { $('#styleTray').hidden = !$('#styleTray').hidden; $('#more').hidden = true; renderStyleRefs(); };
+  $('#sketchBtn').onclick = () => { $('#sketchTray').hidden = !$('#sketchTray').hidden; $('#styleTray').hidden = true; $('#more').hidden = true; renderSketch(); };
+  $('#sketchMode').onclick = (e) => {
+    const b = e.target.closest('[data-m]');
+    if (!b) return;
+    state.sketchMode = b.dataset.m;
+    if (state.control) state.control.mode = b.dataset.m;
+    renderSketch();
+  };
+  $('#sketchPower').addEventListener('input', (e) => {
+    const v = +e.target.value;
+    if (state.control) state.control.strength = v;
+    $('#vSketch').textContent = LEVELS.sk(v);
+  });
+  // чистый лист в редакторе — набросать композицию кистью
+  $('#sketchDraw').onclick = () => {
+    const ar = (state.params.ar || '1:1').split(':').map(Number);
+    const k = 1024 / Math.max(ar[0], ar[1]);
+    const c = document.createElement('canvas');
+    c.width = Math.round(ar[0] * k); c.height = Math.round(ar[1] * k);
+    const g = c.getContext('2d'); g.fillStyle = '#ffffff'; g.fillRect(0, 0, c.width, c.height);
+    $('#edTitle').value = 'Набросок';
+    Editor.open({ src: c.toDataURL('image/png'), blank: true });
+  };
+  window.onEditorToSketch = (dataUrl) => {
+    state.sketchMode = 'sketch';
+    state.control = null;
+    setMode('draw');
+    showPage('create');
+    setControl({ url: dataUrl, mode: 'sketch' });
+    $('#prompt').focus();
+    toast('Набросок готов — опишите, что это, и нажмите «Нарисовать»');
+  };
+  $('#styleBtn').onclick = () => { $('#styleTray').hidden = !$('#styleTray').hidden; $('#sketchTray').hidden = true; $('#more').hidden = true; renderStyleRefs(); };
   $('#sw').addEventListener('input', (e) => { state.params.sw = +e.target.value; saveParams(); syncControls(); });
   $('#saveStyle').onclick = async () => {
     if (!state.styleRefs.length) return toast('Сначала добавьте картинки стиля', true);

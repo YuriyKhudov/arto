@@ -30,6 +30,9 @@
         "ipadapter": "ip-adapter-plus_sdxl_vit-h.safetensors",
         "clipVision": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors",
         "weightType": "style transfer"
+      },
+      "control": {
+        "union": "diffusion_pytorch_model_promax.safetensors"
       }
     },
     "lite": {
@@ -56,6 +59,16 @@
         "ipadapter": "ip-adapter-plus_sd15.safetensors",
         "clipVision": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors",
         "weightType": "weak input"
+      },
+      "control": {
+        "sketch": [
+          "control_v11p_sd15_scribble_fp16.safetensors",
+          "control_v11p_sd15_scribble.pth"
+        ],
+        "photo": [
+          "control_v11p_sd15_canny_fp16.safetensors",
+          "control_v11p_sd15_canny.pth"
+        ]
       }
     }
   },

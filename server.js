@@ -16,7 +16,7 @@ process.on('uncaughtException', (e) => { logError('Ошибка', e); process.ex
 process.on('unhandledRejection', (e) => logError('Ошибка (async)', e));
 
 const { STYLES, buildPrompts, parseInlineParams, dimsFor } = require('./prompt');
-const { Comfy, wfGenerate, wfUpscale, wfEdit } = require('./comfy');
+const { Comfy, wfGenerate, wfUpscale, wfEdit, wfOutpaint, wfOutpaintUnion, wfTrainLora } = require('./comfy');
 const { toEnglish, preload: preloadTranslator } = require('./translate');
 // библиотека картинок нужна только для сохранения фактуры — если её нет, остальное работает
 const texture = () => require('./texture');
@@ -77,6 +77,10 @@ const onGpu = (fn) => (gpuChain = gpuChain.then(fn, fn));
 
 const modelCache = {};
 async function model(folder, name) {
+  if (Array.isArray(name)) {
+    for (const n of name) { try { return await model(folder, n); } catch {} }
+    throw new Error(`Не найдена модель «${name[0]}». Запустите install.bat — он докачает только недостающие модели, работы сохранятся.`);
+  }
   const key = folder + '|' + name;
   if (!modelCache[key]) {
     const found = await comfy.resolve(folder, name);
@@ -118,7 +122,7 @@ function finishJob(job) {
 
 // ---------- прогресс: проценты и «осталось ~N с» ----------
 // Средняя длительность одной картинки по видам работ — уточняется после каждого запуска
-const avgSec = { imagine: 6, variation: 6, upscale: 3, edit: 40 };
+const avgSec = { imagine: 6, variation: 6, upscale: 3, edit: 40, outpaint: 10, train: 1500 };
 
 function tracker(img, kind) {
   const t0 = Date.now();
@@ -158,6 +162,9 @@ function startJob(job, runOne) {
         running = job;
         const prog = tracker(img, job.type);
         try {
+          // двигатель ещё запускается — подождать (до 5 минут), а не падать с ошибкой
+          if (comfy.status === 'starting') img.progress = { stage: 'starting', pct: 0, eta: null };
+          for (let t = 0; comfy.status === 'starting' && t < 300 && !job.cancelled; t++) await new Promise((r) => setTimeout(r, 1000));
           if (comfy.status !== 'ready') throw new Error(comfy.message);
           img.file = saveImage(`${job.id}_${img.index}`, await runOne(img, prog));
           prog.done();
@@ -182,14 +189,21 @@ function baseJob(type, extra) {
 }
 
 // Нарисовать (в т.ч. от картинки-основы и вариации)
-async function createImagine({ prompt, params, ref, variation, styles = [] }) {
+// Набросок: тёмные линии на светлой бумаге → светлые линии на тёмном (так ждёт ControlNet), плюс контраст
+async function prepareSketch(buf) {
+  const sharp = require('sharp');
+  return sharp(buf).flatten({ background: '#ffffff' }).grayscale().normalize().negate().linear(1.6, -60).png().toBuffer();
+}
+
+async function createImagine({ prompt, params, ref, variation, styles = [], control = null }) {
   const inline = parseInlineParams(prompt);
   const p = { ...params, ...inline.params };
   const count = Math.max(1, Math.min(32, Math.round(+p.count) || 4));
   const seed = p.seed !== '' && p.seed != null && Number.isFinite(+p.seed) ? +p.seed : Math.floor(Math.random() * 2 ** 31);
   const subjectEn = await toEnglish(inline.text);
   const noEn = await toEnglish(p.no);
-  const built = buildPrompts({ subject: subjectEn, style: p.style, stylize: +p.stylize, chaos: +p.chaos, weird: +p.weird, no: noEn, seed, count });
+  const mlEntry = p.myLora && myLoras.find((x) => x.id === p.myLora.id);
+  const built = buildPrompts({ subject: (mlEntry ? mlEntry.trigger + ' style artwork, ' : '') + subjectEn, style: p.style, stylize: +p.stylize, chaos: +p.chaos, weird: +p.weird, no: noEn, seed, count });
   // Качество: черновик — меньше и быстрее; высокое — больше шагов и сразу увеличение ×2
   const q = ['draft', 'normal', 'high'].includes(p.quality) ? p.quality : 'normal';
   const g0 = edition.generate;
@@ -214,24 +228,46 @@ async function createImagine({ prompt, params, ref, variation, styles = [] }) {
   });
   if (refBuf && !variation) job.sources = [saveImage(`${job.id}_src0`, refBuf)];
   job.styleFiles = styles.slice(0, 3).map((st, i) => saveImage(`${job.id}_style${i}`, st.buf));
+  if (control?.buf && edition.control) {
+    job.control = {
+      file: saveImage(`${job.id}_control`, control.buf),
+      mode: control.mode === 'photo' ? 'photo' : 'sketch',
+      strength: Math.max(0.1, Math.min(1.5, +control.strength || 0.8)),
+    };
+  }
   job.styleWeights = styles.slice(0, 3).map((st) => st.w);
   const sw = Number.isFinite(+p.sw) ? Math.max(0, Math.min(2, +p.sw)) : 1;
 
   let refName = null;
   let styleNames = null;
+  let controlName = null;
   return startJob(job, async (img, prog) => {
     if (refBuf && !refName) refName = await comfy.upload(refBuf, `${job.id}_ref.${sniffExt(refBuf)}`);
     if (job.styleFiles.length && !styleNames) {
       styleNames = await Promise.all(job.styleFiles.map((f) => comfy.upload(fs.readFileSync(path.join(IMAGES, f)), f)));
     }
+    if (job.control && !controlName) {
+      const raw = fs.readFileSync(path.join(IMAGES, job.control.file));
+      const buf = job.control.mode === 'sketch' ? await prepareSketch(raw) : raw;
+      controlName = await comfy.upload(buf, `${job.id}_cn.png`);
+    }
+    const cc = edition.control;
+    const control = job.control && controlName ? {
+      image: controlName, mode: job.control.mode, strength: job.control.strength,
+      end: job.control.mode === 'photo' ? 0.75 : 0.85,
+      union: !!cc.union,
+      model: await model('controlnet', cc.union || (job.control.mode === 'photo' ? cc.photo : cc.sketch)),
+    } : null;
     const sr = edition.styleRef;
     const style = styleNames && sr ? { ...sr, ipadapter: await model('ipadapter', sr.ipadapter), clipVision: await model('clip_vision', sr.clipVision) } : null;
+    const ml = p.myLora && myLoras.find((x) => x.id === p.myLora.id);
+    const loras = ml ? [{ name: await model('loras', ml.file), strength: Math.max(0, Math.min(1.5, +p.myLora.w || 1)) }] : [];
     const out = await comfy.run(wfGenerate({
-      ckpt: await model('checkpoints', g.ckpt), loras: [],
+      ckpt: await model('checkpoints', g.ckpt), loras,
       prompt: img.finalPrompt, negative: built.negative, width, height, seed: img.seed,
       steps: g.steps, cfg: g.cfg, sampler: g.sampler, scheduler: g.scheduler,
       refImage: refName, denoise,
-      styleRefs: styleNames, styleWeights: job.styleWeights, style, styleWeight: sw,
+      styleRefs: styleNames, styleWeights: job.styleWeights, style, styleWeight: sw, control,
     }), { onProgress: prog });
     if (q !== 'high') return out;
     const up = await comfy.upload(out, `${job.id}_hq${img.index}.png`);
@@ -254,10 +290,10 @@ async function editInstruction(text, variant = 0) {
   return `Edit the image: ${en}. Keep everything that is not mentioned unchanged.${VARIETY[variant % VARIETY.length]}`;
 }
 
-async function runEdit({ names, firstBuf, instruction, seed, prog }) {
+async function runEdit({ names, firstBuf, instruction, seed, prog, inpaint = null }) {
   const e = edition.edit;
   const opts = {
-    images: names, instruction, seed,
+    images: names, instruction, seed, inpaint,
     edit: {
       ...e,
       unet: await model('diffusion_models', e.unet),
@@ -316,6 +352,115 @@ function createUpscale(src, index, mode = 'simple') {
       steps: Math.max(10, g.steps + 4), cfg: g.cfg, sampler: g.sampler, scheduler: g.scheduler,
       refImage: upName, denoise: 0.35,
     }), { onProgress: prog });
+  });
+}
+
+// ---------- раскрыть кадр ----------
+// mode: wide | tall | all | ar (тогда ar = '16:9' и т.п.); amount — на сколько расширить (0.25…0.6)
+function createOutpaint(src, index, { mode = 'wide', amount = 0.4, ar = null } = {}) {
+  const s = src.images[index];
+  const orig = fs.readFileSync(path.join(IMAGES, s.file));
+  const [W0, H0] = pngSize(orig) || [src.params.width || 1024, src.params.height || 1024];
+  const g = edition.generate;
+  // размеры холста после расширения (в пикселях оригинала)
+  let L = 0, T = 0, Rr = 0, B = 0;
+  const a = Math.max(0.15, Math.min(0.8, +amount || 0.4));
+  if (mode === 'wide') L = Rr = (W0 * a) / 2;
+  else if (mode === 'tall') T = B = (H0 * a) / 2;
+  else if (mode === 'all') { L = Rr = (W0 * a) / 2; T = B = (H0 * a) / 2; }
+  else if (mode === 'ar' && ar) {
+    const [x, y] = String(ar).split(':').map(Number);
+    const r = x / y;
+    if (r > W0 / H0) L = Rr = (H0 * r - W0) / 2; else T = B = (W0 / r - H0) / 2;
+  }
+  // держим общий размер в разумных пределах для модели: ~1.3 базовой площади
+  const total = (W0 + L + Rr) * (H0 + T + B);
+  const k = Math.min(1, Math.sqrt(((g.base * 1.3) ** 2) / total));
+  const r8 = (v) => Math.max(0, Math.round((v * k) / 8) * 8);
+  const w = r8(W0), h = r8(H0), left = r8(L), right = r8(Rr), top = r8(T), bottom = r8(B);
+  if (!left && !right && !top && !bottom) throw new Error('Картинка уже в этом формате');
+  const job = baseJob('outpaint', {
+    variation: { jobId: src.id, index, mode },
+    prompt: src.prompt, rawPrompt: src.rawPrompt, params: { ...src.params, width: w + left + right, height: h + top + bottom, outMode: mode, outAr: ar },
+    negative: src.negative, before: s.file,
+    images: [0, 1].map((i) => ({ index: i, finalPrompt: s.finalPrompt, seed: (s.seed || 1) + 101 + i, file: null, error: null, liked: false })),
+  });
+  const sharp = require('sharp');
+  const Wt = w + left + right, Ht = h + top + bottom;
+  const feather = Math.round(Math.min(w, h) * 0.1); // ширина мягкого перехода внутрь оригинала
+  // маска: 255 — поле (рисовать), внутри оригинала у края — плавный спуск к 0
+  const mask = Buffer.alloc(Wt * Ht);
+  for (let y = 0; y < Ht; y++) for (let x = 0; x < Wt; x++) {
+    const ix = x - left, iy = y - top;
+    let v = 255;
+    if (ix >= 0 && iy >= 0 && ix < w && iy < h) {
+      const d = Math.min(left ? ix : 1e9, right ? w - 1 - ix : 1e9, top ? iy : 1e9, bottom ? h - 1 - iy : 1e9);
+      v = d >= feather ? 0 : Math.round(255 * (1 - d / feather));
+    }
+    mask[y * Wt + x] = v;
+  }
+  let names = null;
+  let base = null;
+  return startJob(job, async (img, prog) => {
+    if (!names) {
+      const inner = await sharp(orig).removeAlpha().resize(w, h, { fit: 'fill' }).toBuffer();
+      // зеркально продолжить края и размыть их — модель видит цвета и фон, но не копирует детали
+      const ext = await sharp(inner).extend({ top, bottom, left, right, extendWith: 'copy' }).blur(45).toBuffer();
+      base = await sharp(ext).composite([{ input: inner, left, top }]).png().toBuffer();
+      const maskPng = await sharp(mask, { raw: { width: Wt, height: Ht, channels: 1 } }).toColourspace('srgb').png().toBuffer();
+      names = [await comfy.upload(base, `${job.id}_base.png`), await comfy.upload(maskPng, `${job.id}_mask.png`)];
+    }
+    // основной способ — ИИ-редактор: он видит всю картинку и продолжает сцену без швов
+    const sides = [left || right ? 'left and right' : '', top || bottom ? 'top and bottom' : ''].filter(Boolean).join(' and ');
+    // нет модели ControlNet Union (не докачана) — тихо переходим к ИИ-редактору
+    const cu = edition.control?.union ? await model('controlnet', edition.control.union).catch(() => null) : null;
+    if (!names[2] && cu) {
+      // для ControlNet repaint: оригинал на чёрном поле + жёсткая маска полей
+      const inner2 = await sharp(orig).removeAlpha().resize(w, h, { fit: 'fill' }).toBuffer();
+      const black = await sharp(inner2).extend({ top, bottom, left, right, background: '#000000' }).png().toBuffer();
+      const hard = Buffer.alloc(Wt * Ht, 255);
+      for (let y = top; y < top + h; y++) hard.fill(0, y * Wt + left, y * Wt + left + w);
+      const hardPng = await sharp(hard, { raw: { width: Wt, height: Ht, channels: 1 } }).toColourspace('srgb').png().toBuffer();
+      names[2] = await comfy.upload(black, `${job.id}_cn.png`);
+      names[3] = await comfy.upload(hardPng, `${job.id}_hard.png`);
+    }
+    const out = cu
+      // лучший способ: та же модель-художник + ControlNet Union «repaint» — стиль совпадает, сцена продолжается
+      ? await comfy.run(wfOutpaintUnion({
+        ckpt: await model('checkpoints', g.ckpt), union: cu,
+        cnImage: names[2], image: names[0], mask: names[3],
+        prompt: (s.finalPrompt || src.prompt || '') + ', wide view, the scene continues naturally beyond the frame',
+        negative: [src.negative, 'frame, border, seam, split image, collage, blank area, blurry'].filter(Boolean).join(', '),
+        seed: img.seed, steps: Math.max(12, g.steps + 4), cfg: g.cfg, sampler: g.sampler, scheduler: g.scheduler,
+      }), { onProgress: prog })
+      : edition.edit?.kind === 'flux2'
+      // Lite: klein смотрит на оригинал и рисует только поля по маске — середина не меняется
+      ? await runEdit({
+        names: [names[4] || (names[4] = await comfy.upload(await sharp(orig).removeAlpha().png().toBuffer(), `${job.id}_orig.png`))],
+        firstBuf: base, seed: img.seed, prog, inpaint: { image: names[0], mask: names[1] },
+        instruction: (img.index % 2 === 0
+          ? 'A wider view of the same picture: continue the existing background, surface and lighting beyond the frame, no new objects. '
+          : 'A wider view of the same picture: the scene naturally continues beyond the frame with new fitting details. ')
+          + 'Painted in exactly the same art style, technique, colors and paper as the reference. ' + (s.finalPrompt || src.prompt || ''),
+      })
+      : edition.edit
+      ? await runEdit({
+        names: [names[0]], firstBuf: base, seed: img.seed, prog,
+        instruction: img.index % 2 === 0
+          // вариант «спокойно»: продолжить фон и фактуру, ничего не добавлять
+          ? `The ${sides} margins of this image are plain blurred color. Repaint them by seamlessly continuing the existing background, texture, surface and lighting of the picture, matching its colors and art technique exactly. Add no new objects. Do not leave any blur. Keep the sharp center image exactly as it is.`
+          // вариант «с деталями»: придумать, что за краем кадра
+          : `The ${sides} margins of this image are plain blurred color. Replace them with new sharp, detailed content that naturally continues the scene beyond the original frame, painted in exactly the same art style and technique as the center. Do not leave any blur. Keep the sharp center image exactly as it is.`,
+      })
+      // запасной способ, если ИИ-редактор не настроен — модель-художник дорисовывает поля по маске
+      : await comfy.run(wfOutpaint({
+        ckpt: await model('checkpoints', g.ckpt), image: names[0], mask: names[1],
+        prompt: (s.finalPrompt || src.prompt || '') + ', seamless continuation of the scene, same style and lighting',
+        negative: [src.negative, 'frame, border, seam, split image, collage, blank area'].filter(Boolean).join(', '),
+        seed: img.seed, steps: Math.max(10, g.steps + 4), cfg: g.cfg, sampler: g.sampler, scheduler: g.scheduler,
+      }), { onProgress: prog });
+    // оригинал — поверх, с той же мягкой маской: в центре пиксель в пиксель, у краёв — плавно
+    try { return await texture().blendByMask(base, out, mask, Wt, Ht); } catch (e) { logError('Раскрыть кадр: вклейка', e); return out; }
   });
 }
 
@@ -401,7 +546,7 @@ function serveFile(res, base, rel) {
 }
 
 const findJob = (id) => active.get(id) || temp.get(id) || gallery.find((j) => j.id === id);
-const jobFiles = (job) => [...job.images.map((i) => i.file), ...(job.sources || []), ...(job.styleFiles || []), job.before].filter(Boolean);
+const jobFiles = (job) => [...job.images.map((i) => i.file), ...(job.sources || []), ...(job.styleFiles || []), job.before, job.control?.file].filter(Boolean);
 const fileInUse = (file) => gallery.some((j) => jobFiles(j).includes(file)) || [...active.values()].some((j) => jobFiles(j).includes(file));
 
 // Образцы стиля: data URI, картинка из ленты {jobId,index} или сохранённый стиль {styleId}
@@ -412,18 +557,88 @@ function styleBuffers(list) {
     const w = Number.isFinite(+s?.w) ? Math.max(0, Math.min(2, +s.w)) : 1;
     let buf = null;
     if (s?.data) buf = dataUriToBuffer(s.data);
-    else if (s?.file && /^[w.-]+$/.test(s.file)) buf = fs.existsSync(path.join(IMAGES, s.file)) ? fs.readFileSync(path.join(IMAGES, s.file)) : null;
+    else if (s?.file && /^[\w.-]+$/.test(s.file)) buf = fs.existsSync(path.join(IMAGES, s.file)) ? fs.readFileSync(path.join(IMAGES, s.file)) : null;
     else if (s?.jobId != null) buf = imageBuf(s.jobId, s.index);
     if (buf) out.push({ buf, w });
   }
   return out.slice(0, 3);
 }
+// набросок из запроса: { data } | { jobId, index } | { file }, плюс mode и strength
+function controlFrom(c) {
+  if (!c) return null;
+  const [buf] = styleBuffers([c]).map((x) => x.buf);
+  return buf ? { buf, mode: c.mode, strength: c.strength } : null;
+}
+const jobControl = (job) => (job.control ? { buf: fs.readFileSync(path.join(IMAGES, job.control.file)), mode: job.control.mode, strength: job.control.strength } : null);
 const jobStyles = (job) => (job.styleFiles || []).map((f, i) => ({ buf: fs.readFileSync(path.join(IMAGES, f)), w: job.styleWeights?.[i] ?? 1 }));
 
 // ---------- «Мои стили» (аналог кодов --sref) ----------
 const STYLES_FILE = path.join(DATA, 'styles.json');
 let myStyles = readJSON(STYLES_FILE, []);
 const saveStyles = () => fs.writeFileSync(STYLES_FILE, JSON.stringify(myStyles, null, 1));
+
+// ---------- «Мои тюбики» (палитра мастерской) ----------
+const MYPAINTS_FILE = path.join(DATA, 'mypaints.json');
+let myPaints = readJSON(MYPAINTS_FILE, {});
+
+// ---------- «моя манера»: обученные LoRA ----------
+const LORAS_FILE = path.join(DATA, 'loras.json');
+let myLoras = readJSON(LORAS_FILE, []);
+const saveLoras = () => fs.writeFileSync(LORAS_FILE, JSON.stringify(myLoras, null, 1));
+
+function createTrain({ name, sources, quality = 'normal' }) {
+  const g = edition.generate;
+  const id = newId();
+  const slug = 'arto' + id.slice(-6);           // слово-ключ манеры в промпте
+  const size = Math.min(768, g.base);           // учим на 768 px (Pro) / 576 px (Lite) — для манеры хватает, и помещается в видеопамять
+  const n = sources.length;
+  // ~2–3 с на шаг на видеокарте уровня RTX 4080: быстро 15–25 мин, качественно 25–50 мин
+  const steps = quality === 'fast' ? Math.min(600, Math.max(300, n * 20)) : Math.min(1200, Math.max(600, n * 40));
+  const job = baseJob('train', {
+    prompt: 'Обучение манеры «' + name + '»', rawPrompt: '', params: { steps, count: 1, width: size, height: size },
+    images: [{ index: 0, finalPrompt: '', seed: 1, file: null, error: null, liked: false }],
+    trainName: name,
+  });
+  job.sources = sources.slice(0, 8).map((buf, i) => saveImage(`${job.id}_src${i}`, buf));
+  return startJob(job, async (img, prog) => {
+    const sharp = require('sharp');
+    const folder = 'arto_train_' + id;
+    // 1) подготовить картинки: квадрат по центру нужного размера
+    for (let i = 0; i < sources.length; i++) {
+      const buf = await sharp(sources[i]).removeAlpha().resize(size, size, { fit: 'cover', position: 'attention' }).png().toBuffer();
+      await comfy.upload(buf, `${String(i).padStart(3, '0')}.png`, folder);
+    }
+    // 2) обучение: сначала выгрузить из видеокарты всё лишнее (например, ИИ-редактор)
+    await comfy.free();
+    const prefix = `loras/arto/${slug}`;
+    await comfy.run(wfTrainLora({
+      ckpt: await model('checkpoints', g.ckpt), folder, caption: `${slug} style artwork`, steps, seed: 7, prefix,
+    }), { onProgress: prog, timeoutMs: 4 * 3600 * 1000, expectImage: false });
+    // 3) перенести файл LoRA из output ComfyUI в его папку моделей
+    const outDir = path.join(config.comfy.path, 'ComfyUI', 'output', 'loras', 'arto');
+    const made = fs.readdirSync(outDir).filter((f) => f.startsWith(slug)).sort().pop();
+    if (!made) throw new Error('Обучение завершилось, но файл манеры не найден');
+    const dstDir = path.join(config.comfy.path, 'ComfyUI', 'models', 'loras', 'arto');
+    fs.mkdirSync(dstDir, { recursive: true });
+    const file = slug + '.safetensors';
+    fs.copyFileSync(path.join(outDir, made), path.join(dstDir, file));
+    const entry = { id, name, file, trigger: slug, images: n, steps, createdAt: Date.now(), edition: edition.id };
+    myLoras.unshift(entry);
+    saveLoras();
+    modelCache['loras|' + file] = undefined;
+    // 4) пробная картинка в новой манере
+    return comfy.run(wfGenerate({
+      ckpt: await model('checkpoints', g.ckpt), loras: [{ name: await model('loras', file), strength: 1 }],
+      prompt: `${slug} style artwork, a quiet still life with a vase and fruit on a table`, negative: '',
+      width: size, height: size, seed: 11, steps: g.steps, cfg: g.cfg, sampler: g.sampler, scheduler: g.scheduler,
+    }));
+  });
+}
+
+// ---------- доски настроения ----------
+const BOARDS_FILE = path.join(DATA, 'boards.json');
+let boards = readJSON(BOARDS_FILE, []);
+const saveBoards = () => fs.writeFileSync(BOARDS_FILE, JSON.stringify(boards, null, 1));
 
 // ---------- «Мои промпты» ----------
 const PROMPTS_FILE = path.join(DATA, 'prompts.json');
@@ -468,7 +683,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/imagine' && req.method === 'POST') {
       const body = await readBody(req);
       if (!String(body.prompt || '').trim()) return send(res, 400, { error: 'Опишите, что нарисовать' });
-      return send(res, 200, await createImagine({ prompt: String(body.prompt), params: body.params || {}, ref: body.ref || null, styles: styleBuffers(body.styles) }));
+      return send(res, 200, await createImagine({ prompt: String(body.prompt), params: body.params || {}, ref: body.ref || null, styles: styleBuffers(body.styles), control: controlFrom(body.control) }));
     }
     if (p === '/api/vary' && req.method === 'POST') {
       const { jobId, index, mode } = await readBody(req);
@@ -480,7 +695,7 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, createEdit({ instruction: src.prompt, sources: [buf], count: 4, from: { jobId, index, mode } }));
       }
       return send(res, 200, await createImagine({
-        prompt: src.prompt, params: { ...src.params, seed: '', count: 4 }, ref: buf, styles: jobStyles(src),
+        prompt: src.prompt, params: { ...src.params, seed: '', count: 4 }, ref: buf, styles: jobStyles(src), control: jobControl(src),
         variation: { jobId, index, mode, strength: strong ? 0.72 : 0.45 },
       }));
     }
@@ -492,13 +707,19 @@ const server = http.createServer(async (req, res) => {
         const sources = (src.sources || []).map((f) => fs.readFileSync(path.join(IMAGES, f)));
         return send(res, 200, createEdit({ instruction: src.prompt, sources, count: src.images.length }));
       }
-      return send(res, 200, await createImagine({ prompt: src.rawPrompt || src.prompt, params: { ...src.params, seed: '' }, styles: jobStyles(src) }));
+      return send(res, 200, await createImagine({ prompt: src.rawPrompt || src.prompt, params: { ...src.params, seed: '' }, styles: jobStyles(src), control: jobControl(src) }));
     }
     if (p === '/api/upscale' && req.method === 'POST') {
       const { jobId, index, mode } = await readBody(req);
       const src = findJob(jobId);
       if (!src?.images[index]?.file) return send(res, 404, { error: 'Изображение не найдено' });
       return send(res, 200, createUpscale(src, index, ['simple', 'art', 'fix'].includes(mode) ? mode : 'simple'));
+    }
+    if (p === '/api/outpaint' && req.method === 'POST') {
+      const { jobId, index, mode, amount, ar } = await readBody(req);
+      const src = findJob(jobId);
+      if (!src?.images[index]?.file) return send(res, 404, { error: 'Изображение не найдено' });
+      return send(res, 200, createOutpaint(src, index, { mode, amount, ar }));
     }
     if (p === '/api/edit' && req.method === 'POST') {
       // источники: картинки из галереи {jobId,index} и/или загруженные (data URI), до 3 штук
@@ -530,6 +751,71 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, job);
     }
 
+    if (p === '/api/loras' && req.method === 'GET') return send(res, 200, myLoras.filter((x) => !x.edition || x.edition === edition.id));
+    if (p === '/api/train' && req.method === 'POST') {
+      const body = await readBody(req, 300 * 1024 * 1024);
+      let bufs = [];
+      if (body.boardId) {
+        const b = boards.find((x) => x.id === body.boardId);
+        bufs = (b?.items || []).map((it) => fs.readFileSync(path.join(IMAGES, it.file)));
+      } else bufs = (body.images || []).map(dataUriToBuffer).filter(Boolean);
+      if (bufs.length < 5) return send(res, 400, { error: 'Нужно хотя бы 5 картинок (лучше 15–30)' });
+      return send(res, 200, createTrain({ name: String(body.name || 'Моя манера').slice(0, 50), sources: bufs.slice(0, 60), quality: body.quality }));
+    }
+    const lm = /^\/api\/loras\/([\w-]+)$/.exec(p);
+    if (lm && req.method === 'DELETE') {
+      const e = myLoras.find((x) => x.id === lm[1]);
+      if (!e) return send(res, 404, { error: 'Не найдено' });
+      myLoras = myLoras.filter((x) => x !== e);
+      saveLoras();
+      try { fs.rmSync(path.join(config.comfy.path, 'ComfyUI', 'models', 'loras', 'arto', e.file), { force: true }); } catch {}
+      return send(res, 200, { ok: true });
+    }
+    if (p === '/api/boards' && req.method === 'GET') return send(res, 200, boards);
+    if (p === '/api/boards' && req.method === 'POST') {
+      const body = await readBody(req);
+      const b = { id: newId(), name: String(body.name || 'Новая доска').slice(0, 60), createdAt: Date.now(), items: [] };
+      boards.unshift(b);
+      saveBoards();
+      return send(res, 200, b);
+    }
+    const bm = /^\/api\/boards\/([\w-]+)(?:\/items(?:\/(\d+))?)?$/.exec(p);
+    if (bm) {
+      const b = boards.find((x) => x.id === bm[1]);
+      if (!b) return send(res, 404, { error: 'Доска не найдена' });
+      const isItems = p.includes('/items');
+      if (!isItems && req.method === 'PATCH') { const body = await readBody(req); if (body.name) b.name = String(body.name).slice(0, 60); saveBoards(); return send(res, 200, b); }
+      if (!isItems && req.method === 'DELETE') {
+        boards = boards.filter((x) => x !== b);
+        saveBoards();
+        for (const it of b.items) fs.rm(path.join(IMAGES, it.file), () => {});
+        return send(res, 200, { ok: true });
+      }
+      if (isItems && req.method === 'POST') {
+        // своя копия картинки — доска не зависит от удаления работы в ленте
+        const body = await readBody(req);
+        const buf = body.jobId ? imageBuf(body.jobId, body.index) : dataUriToBuffer(body.data);
+        if (!buf) return send(res, 400, { error: 'Картинка не найдена' });
+        const it = { file: saveImage(`board_${b.id}_${newId()}`, buf), note: '', from: body.jobId ? { jobId: body.jobId, index: body.index } : null, prompt: body.jobId ? findJob(body.jobId)?.prompt || '' : '' };
+        b.items.push(it);
+        saveBoards();
+        return send(res, 200, b);
+      }
+      if (isItems && bm[2] != null) {
+        const it = b.items[+bm[2]];
+        if (!it) return send(res, 404, { error: 'Не найдено' });
+        if (req.method === 'PATCH') { const body = await readBody(req); it.note = String(body.note || '').slice(0, 500); saveBoards(); return send(res, 200, b); }
+        if (req.method === 'DELETE') { b.items.splice(+bm[2], 1); saveBoards(); fs.rm(path.join(IMAGES, it.file), () => {}); return send(res, 200, b); }
+      }
+    }
+    if (p === '/api/mypaints' && req.method === 'GET') return send(res, 200, myPaints);
+    if (p === '/api/mypaints' && req.method === 'POST') {
+      const body = await readBody(req);
+      if (typeof body.series !== 'string' || !Array.isArray(body.nums)) return send(res, 400, { error: 'Неверные данные' });
+      myPaints[body.series] = body.nums.map(String).slice(0, 500);
+      fs.writeFileSync(MYPAINTS_FILE, JSON.stringify(myPaints));
+      return send(res, 200, { ok: true });
+    }
     // ---------- «Мои промпты»: только то, что художник сохранил сам ----------
     if (p === '/api/prompts' && req.method === 'GET') return send(res, 200, myPrompts);
     if (p === '/api/prompts' && req.method === 'POST') {

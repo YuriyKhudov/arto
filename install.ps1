@@ -50,12 +50,12 @@ if (-not $Edition) {
   Write-Host "      Все возможности Arto — рисование, стиль с картинок, ИИ-редактор словами,"
   Write-Host "      исправление анатомии, редактор с кистью и лассо. Модели облегчённые:"
   Write-Host "      картинки чуть проще и меньше (до 576 px, с увеличением ×2), зато быстро."
-  Write-Host "      Нужно: видеокарта NVIDIA от 6 ГБ, 16 ГБ оперативной памяти. Скачать ~17 ГБ."
+  Write-Host "      Нужно: видеокарта NVIDIA от 6 ГБ, 16 ГБ оперативной памяти. Скачать ~19 ГБ."
   Write-Host ""
   Write-Host "   2) PRO$($mark.pro)" -ForegroundColor Cyan
   Write-Host "      Всё то же самое на тяжёлых моделях: картинки крупнее (1024 px),"
   Write-Host "      детальнее и художественнее, ИИ-редактор точнее."
-  Write-Host "      Нужно: видеокарта NVIDIA от 12 ГБ, 32 ГБ оперативной памяти. Скачать ~40 ГБ."
+  Write-Host "      Нужно: видеокарта NVIDIA от 12 ГБ, 32 ГБ оперативной памяти. Скачать ~43 ГБ."
   Write-Host ""
   if ($rec -eq "lite" -and $vram -gt 0) { Say "   У вас $([math]::Round($vram/1024)) ГБ видеопамяти — Pro может работать очень медленно или не запуститься." "DarkYellow" }
   if ($cpuOnly) { Say "   Видеокарта NVIDIA не найдена — Pro работать не будет, Lite будет работать на процессоре (минуты на картинку)." "DarkYellow" }
@@ -111,9 +111,12 @@ if ($Edition -eq "pro") {
   $clip = Need "text_encoders" "qwen_2.5_vl_7b_fp8_scaled.safetensors" "$HF/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors" "понимание текста Qwen (9 ГБ)"
   $vae = Need "vae" "qwen_image_vae.safetensors" "$HF/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors" "VAE (0,2 ГБ)"
   $null = Need "ipadapter" "ip-adapter-plus_sdxl_vit-h.safetensors" "$HF/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors" "стиль с картинок для SDXL (0,8 ГБ)"
+  $null = Need "controlnet" "diffusion_pytorch_model_promax.safetensors" "$HF/xinsir/controlnet-union-sdxl-1.0/resolve/main/diffusion_pytorch_model_promax.safetensors" "рисование по наброску и раскрытие кадра (2,5 ГБ)"
 } else {
   $ckpt = Need "checkpoints" "DreamShaper8_LCM.safetensors" "$HF/Lykon/DreamShaper/resolve/main/DreamShaper8_LCM.safetensors" "художник DreamShaper 8 LCM (2 ГБ)"
   $null = Need "ipadapter" "ip-adapter-plus_sd15.safetensors" "$HF/h94/IP-Adapter/resolve/main/models/ip-adapter-plus_sd15.safetensors" "стиль с картинок для SD 1.5 (0,1 ГБ)"
+  $null = Need "controlnet" "control_v11p_sd15_scribble_fp16.safetensors" "$HF/comfyanonymous/ControlNet-v1-1_fp16_safetensors/resolve/main/control_v11p_sd15_scribble_fp16.safetensors" "рисование по наброску (0,7 ГБ)"
+  $null = Need "controlnet" "control_v11p_sd15_canny_fp16.safetensors" "$HF/comfyanonymous/ControlNet-v1-1_fp16_safetensors/resolve/main/control_v11p_sd15_canny_fp16.safetensors" "рисование по контуру фото (0,7 ГБ)"
   # лёгкий ИИ-редактор: FLUX.2 klein 4B (Apache 2.0)
   $null = Need "diffusion_models" "flux-2-klein-4b-fp8.safetensors" "$HF/black-forest-labs/FLUX.2-klein-4b-fp8/resolve/main/flux-2-klein-4b-fp8.safetensors" "ИИ-редактор FLUX.2 klein (3,9 ГБ)"
   $null = Need "text_encoders" "qwen_3_4b.safetensors" "$HF/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors" "понимание текста для редактора (7,7 ГБ)"

@@ -552,3 +552,56 @@ body[data-page="prompts"] .view-ctl { display: none; }
 .ref-power { display: inline-flex; align-items: center; gap: 6px; }
 .ref-power input { width: 110px; }
 .ref-power em { font-style: normal; color: var(--accent-2); }
+.ed-field input[type=number] { width: 100%; background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; color: var(--text); outline: 0; }
+.ed-field input[type=number]:focus { border-color: var(--accent); }
+.ed-row .ed-field { flex: 1; min-width: 0; }
+
+/* ===== мои тюбики ===== */
+.pn-only { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; }
+.pn-body { position: relative; }
+.pn-mine { position: absolute; inset: 0; background: var(--bg); padding: 18px; display: flex; flex-direction: column; gap: 12px; z-index: 2; }
+.pn-mine-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.pn-mine-head input { flex: 1; min-width: 200px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; outline: 0; }
+.pn-mine-list { overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 14px; align-content: start; }
+.pn-m { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+.pn-m:hover { background: var(--bg-2); }
+.pn-m i { width: 18px; height: 18px; border-radius: 50%; flex: none; border: 1px solid rgba(255,255,255,.2); }
+.pn-m input { accent-color: var(--accent); }
+
+/* ===== набросок ===== */
+.sk-body { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
+.sk-slot .src, .sk-img { width: 150px; height: 150px; }
+.sk-img img { object-fit: contain; background: #fff; }
+.sk-opts { display: flex; flex-direction: column; gap: 12px; flex: 1; min-width: 260px; max-width: 460px; }
+#edToSketch.primary { background: var(--accent); color: #1a1208; border-color: var(--accent); font-weight: 600; }
+
+/* ===== доски ===== */
+.bd-actions { margin-left: auto; display: flex; gap: 8px; }
+.bd-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+.bd-card { text-align: left; border: 1px solid var(--line); background: var(--bg-2); border-radius: 14px; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+.bd-card:hover { border-color: var(--accent); }
+.bd-cover { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; aspect-ratio: 1; border-radius: 10px; overflow: hidden; background: var(--bg-3); }
+.bd-cover img { width: 100%; height: 100%; object-fit: cover; }
+.bd-cover span { grid-column: 1 / -1; display: grid; place-items: center; color: var(--muted); font-size: 12px; }
+.bd-card b { font-weight: 600; }
+.bd-card small { color: var(--muted); font-size: 12px; }
+.bd-name { outline: 0; border-radius: 6px; padding: 0 4px; }
+.bd-name:focus, .bd-name:hover { background: var(--bg-3); }
+.bd-wall { columns: auto 280px; column-gap: 14px; }
+.bd-item { break-inside: avoid; margin: 0 0 14px; position: relative; background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.bd-item img { width: 100%; display: block; cursor: zoom-in; }
+.bd-item figcaption { padding: 8px 10px; font-size: 13px; outline: 0; min-height: 34px; }
+.bd-item figcaption:empty::before { content: attr(data-ph); color: #5f5e65; }
+.bd-x { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; border-radius: 50%; border: 0; background: rgba(0,0,0,.65); color: #fff; opacity: 0; }
+.bd-item:hover .bd-x { opacity: 1; }
+.bp-list { display: flex; flex-wrap: wrap; gap: 6px; max-height: 240px; overflow: auto; }
+.bp-list small { color: var(--muted); }
+.bp-new { flex: 1; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 7px 10px; outline: 0; color: var(--text); }
+body[data-page="boards"] .view-ctl { display: none; }
+
+/* ===== моя манера ===== */
+.ml-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.ml-power { width: 220px; }
+.tr-box { width: min(560px, 100%); }
+.tr-hint { margin: 0; font-size: 13px; line-height: 1.5; }
+.tr-box #trBoard { width: 100%; }

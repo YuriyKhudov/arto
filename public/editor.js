@@ -274,7 +274,7 @@ const Editor = (() => {
     redraw();
   }
 
-  async function open({ src, source }) {
+  async function open({ src, source, blank }) {
     const img = await loadImage(src);
     ed.img = makeCanvas(img.naturalWidth, img.naturalHeight);
     ed.img.getContext('2d').drawImage(img, 0, 0);
@@ -292,8 +292,10 @@ const Editor = (() => {
     renderToolbar();
     syncButtons();
     fit();
-    if (!ed.tool) selectTool(tools.find((t) => !t.action)?.id);
+    if (blank && tools.some((t) => t.id === 'paint')) selectTool('paint');
+    else if (!ed.tool) selectTool(tools.find((t) => !t.action)?.id);
     else selectTool(ed.tool.id);
+    $('#edToSketch').classList.toggle('primary', !!blank);
     $('#edAiBox').hidden = !window.ATELIER?.canEdit;
   }
 
@@ -414,6 +416,12 @@ const Editor = (() => {
     $('#edRedo').onclick = redo;
     $('#edSave').onclick = save;
     $('#edDownload').onclick = download;
+    $('#edToSketch').onclick = () => {
+      if (!window.onEditorToSketch) return;
+      window.onEditorToSketch(ed.img.toDataURL('image/png'));
+      ed.dirty = false;
+      close();
+    };
     $('#edCompare').onclick = () => {
       ed.compare = ed.compare == null ? 0.5 : null;
       $('#edCompare').classList.toggle('on', ed.compare != null);

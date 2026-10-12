@@ -73,6 +73,11 @@ class Comfy {
 
   stop() { if (this.proc) this.proc.kill(); }
 
+  // Выгрузить модели из видеопамяти (перед обучением)
+  async free() {
+    try { await fetch(this.url + '/free', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ unload_models: true, free_memory: true }) }); } catch {}
+  }
+
   // Прервать то, что рисуется прямо сейчас
   async interrupt() {
     try { await fetch(this.url + '/interrupt', { method: 'POST' }); } catch {}
@@ -91,10 +96,10 @@ class Comfy {
     return list.find((x) => norm(x) === norm(name)) || list.find((x) => norm(x).endsWith('/' + norm(name).split('/').pop())) || null;
   }
 
-  async upload(buf, name) {
+  async upload(buf, name, subfolder = 'atelier') {
     const fd = new FormData();
     fd.append('image', new Blob([buf]), name);
-    fd.append('subfolder', 'atelier');
+    fd.append('subfolder', subfolder);
     fd.append('overwrite', 'true');
     const r = await fetch(this.url + '/upload/image', { method: 'POST', body: fd });
     if (!r.ok) throw new Error('Не удалось передать картинку двигателю');
@@ -103,11 +108,11 @@ class Comfy {
   }
 
   // Отправить граф и дождаться картинки
-  async run(workflow, { onProgress, timeoutMs = 15 * 60000 } = {}) {
-    try { return await this.runInner(workflow, onProgress, timeoutMs); } finally { if (this.lastId) this.listeners?.delete(this.lastId); }
+  async run(workflow, { onProgress, timeoutMs = 15 * 60000, expectImage = true } = {}) {
+    try { return await this.runInner(workflow, onProgress, timeoutMs, expectImage); } finally { if (this.lastId) this.listeners?.delete(this.lastId); }
   }
 
-  async runInner(workflow, onProgress, timeoutMs) {
+  async runInner(workflow, onProgress, timeoutMs, expectImage = true) {
     const r = await fetch(this.url + '/prompt', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt: workflow, client_id: CLIENT_ID }),
@@ -138,6 +143,7 @@ class Comfy {
         const res = await fetch(`${this.url}/view?${q}`);
         return Buffer.from(await res.arrayBuffer());
       }
+      if (!expectImage) return null;
       throw new Error('Двигатель не вернул изображение');
     }
     throw new Error('Слишком долго — превышено время ожидания');
@@ -181,6 +187,30 @@ function wfGenerate(o) {
   }
   w.pos = { class_type: 'CLIPTextEncode', inputs: { clip, text: o.prompt } };
   w.neg = { class_type: 'CLIPTextEncode', inputs: { clip, text: o.negative || '' } };
+  let posC = ['pos', 0], negC = ['neg', 0];
+  // Набросок / контур с фото: ControlNet ведёт композицию по линиям
+  if (o.control) {
+    const c = o.control;
+    w.cnImg = { class_type: 'LoadImage', inputs: { image: c.image } };
+    let img = ['cnImg', 0];
+    if (c.mode === 'photo') {
+      w.cnEdge = { class_type: 'Canny', inputs: { image: img, low_threshold: 0.15, high_threshold: 0.4 } };
+      img = ['cnEdge', 0];
+    }
+    w.cnScale = { class_type: 'ImageScale', inputs: { image: img, upscale_method: 'lanczos', width: o.width, height: o.height, crop: 'center' } };
+    w.cnModel = { class_type: 'ControlNetLoader', inputs: { control_net_name: c.model } };
+    let net = ['cnModel', 0];
+    if (c.union) {
+      w.cnType = { class_type: 'SetUnionControlNetType', inputs: { control_net: net, type: c.mode === 'photo' ? 'canny/lineart/anime_lineart/mlsd' : 'hed/pidi/scribble/ted' } };
+      net = ['cnType', 0];
+    }
+    w.cnApply = {
+      class_type: 'ControlNetApplyAdvanced',
+      inputs: { positive: posC, negative: negC, control_net: net, image: ['cnScale', 0], strength: c.strength, start_percent: 0, end_percent: c.end ?? 0.8, vae: ['ckpt', 2] },
+    };
+    posC = ['cnApply', 0];
+    negC = ['cnApply', 1];
+  }
   let latent;
   if (o.refImage) {
     w.load = { class_type: 'LoadImage', inputs: { image: o.refImage } };
@@ -194,7 +224,7 @@ function wfGenerate(o) {
   w.sample = {
     class_type: 'KSampler',
     inputs: {
-      model, positive: ['pos', 0], negative: ['neg', 0], latent_image: latent,
+      model, positive: posC, negative: negC, latent_image: latent,
       seed: o.seed, steps: o.steps, cfg: o.cfg, sampler_name: o.sampler, scheduler: o.scheduler,
       denoise: o.refImage ? o.denoise : 1,
     },
@@ -202,6 +232,80 @@ function wfGenerate(o) {
   w.decode = { class_type: 'VAEDecode', inputs: { samples: ['sample', 0], vae: ['ckpt', 2] } };
   w.save = { class_type: 'SaveImage', inputs: { images: ['decode', 0], filename_prefix: 'atelier/gen' } };
   return w;
+}
+
+// Раскрыть кадр: подложка (оригинал + зеркально продолженные края) и плавная маска «где дорисовывать».
+// Differential Diffusion меняет сильнее там, где маска светлее, — у краёв оригинала переход мягкий.
+function wfOutpaint(o) {
+  return {
+    ckpt: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: o.ckpt } },
+    dd: { class_type: 'DifferentialDiffusion', inputs: { model: ['ckpt', 0] } },
+    img: { class_type: 'LoadImage', inputs: { image: o.image } },
+    mask: { class_type: 'LoadImageMask', inputs: { image: o.mask, channel: 'red' } },
+    pos: { class_type: 'CLIPTextEncode', inputs: { clip: ['ckpt', 1], text: o.prompt } },
+    neg: { class_type: 'CLIPTextEncode', inputs: { clip: ['ckpt', 1], text: o.negative || '' } },
+    cond: { class_type: 'InpaintModelConditioning', inputs: { positive: ['pos', 0], negative: ['neg', 0], vae: ['ckpt', 2], pixels: ['img', 0], mask: ['mask', 0], noise_mask: true } },
+    sample: {
+      class_type: 'KSampler',
+      inputs: {
+        model: ['dd', 0], positive: ['cond', 0], negative: ['cond', 1], latent_image: ['cond', 2],
+        seed: o.seed, steps: o.steps, cfg: o.cfg, sampler_name: o.sampler, scheduler: o.scheduler, denoise: 1,
+      },
+    },
+    decode: { class_type: 'VAEDecode', inputs: { samples: ['sample', 0], vae: ['ckpt', 2] } },
+    save: { class_type: 'SaveImage', inputs: { images: ['decode', 0], filename_prefix: 'atelier/outpaint' } },
+  };
+}
+
+// Раскрыть кадр «как в профессиональных схемах»: та же модель-художник + ControlNet Union в режиме repaint.
+// ControlNet видит исходник целиком и ведёт дорисовку полей по его содержанию; маска с запасом прячет швы.
+function wfOutpaintUnion(o) {
+  // o.cnImage — оригинал с ЧЁРНЫМИ полями (так ControlNet repaint понимает «дорисуй здесь»),
+  // o.image — подложка для старта (размытое продолжение краёв), o.mask — где дорисовывать (белое)
+  return {
+    ckpt: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: o.ckpt } },
+    cnImg: { class_type: 'LoadImage', inputs: { image: o.cnImage } },
+    img: { class_type: 'LoadImage', inputs: { image: o.image } },
+    mask: { class_type: 'LoadImageMask', inputs: { image: o.mask, channel: 'red' } },
+    pos: { class_type: 'CLIPTextEncode', inputs: { clip: ['ckpt', 1], text: o.prompt } },
+    neg: { class_type: 'CLIPTextEncode', inputs: { clip: ['ckpt', 1], text: o.negative || '' } },
+    cn: { class_type: 'ControlNetLoader', inputs: { control_net_name: o.union } },
+    cnType: { class_type: 'SetUnionControlNetType', inputs: { control_net: ['cn', 0], type: 'repaint' } },
+    cnApply: {
+      class_type: 'ControlNetApplyAdvanced',
+      inputs: { positive: ['pos', 0], negative: ['neg', 0], control_net: ['cnType', 0], image: ['cnImg', 0], strength: 1, start_percent: 0, end_percent: 1, vae: ['ckpt', 2] },
+    },
+    enc: { class_type: 'VAEEncodeForInpaint', inputs: { pixels: ['img', 0], vae: ['ckpt', 2], mask: ['mask', 0], grow_mask_by: 64 } },
+    sample: {
+      class_type: 'KSampler',
+      inputs: {
+        model: ['ckpt', 0], positive: ['cnApply', 0], negative: ['cnApply', 1], latent_image: ['enc', 0],
+        seed: o.seed, steps: o.steps, cfg: o.cfg, sampler_name: o.sampler, scheduler: o.scheduler, denoise: 1,
+      },
+    },
+    decode: { class_type: 'VAEDecode', inputs: { samples: ['sample', 0], vae: ['ckpt', 2] } },
+    save: { class_type: 'SaveImage', inputs: { images: ['decode', 0], filename_prefix: 'atelier/outpaint' } },
+  };
+}
+
+// Обучение «моей манеры»: LoRA на модели, которой Arto рисует. Картинки — в папке input/<folder>.
+function wfTrainLora(o) {
+  return {
+    ckpt: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: o.ckpt } },
+    imgs: { class_type: 'LoadImageDataSetFromFolder', inputs: { folder: o.folder } },
+    data: { class_type: 'MakeTrainingDataset', inputs: { images: ['imgs', 0], vae: ['ckpt', 2], clip: ['ckpt', 1], texts: o.caption } },
+    train: {
+      class_type: 'TrainLoraNode',
+      inputs: {
+        model: ['ckpt', 0], latents: ['data', 0], positive: ['data', 1],
+        batch_size: 1, grad_accumulation_steps: 1, steps: o.steps, learning_rate: o.lr || 0.0003, rank: o.rank || 16,
+        optimizer: 'AdamW', loss_function: 'MSE', seed: o.seed || 1, training_dtype: 'bf16', lora_dtype: 'bf16',
+        quantized_backward: false, algorithm: 'LoRA', gradient_checkpointing: true, checkpoint_depth: 1, offloading: false,
+        existing_lora: '[None]', bucket_mode: false, bypass_mode: false,
+      },
+    },
+    save: { class_type: 'SaveLoRA', inputs: { lora: ['train', 0], prefix: o.prefix, steps: o.steps } },
+  };
 }
 
 // Увеличение ×2 моделью-апскейлером
@@ -238,6 +342,14 @@ function wfEditFlux2(o) {
   w.sampler = { class_type: 'KSamplerSelect', inputs: { sampler_name: 'euler' } };
   w.sigmas = { class_type: 'Flux2Scheduler', inputs: { steps: e.steps || 4, width: o.width, height: o.height } };
   w.latent = { class_type: 'EmptyFlux2LatentImage', inputs: { width: o.width, height: o.height, batch_size: 1 } };
+  if (o.inpaint) {
+    // дорисовка по маске (раскрыть кадр): белое в маске — рисовать заново, чёрное — оставить как есть
+    w.ipImg = { class_type: 'LoadImage', inputs: { image: o.inpaint.image } };
+    w.ipPx = { class_type: 'ImageScale', inputs: { image: ['ipImg', 0], upscale_method: 'lanczos', width: o.width, height: o.height, crop: 'disabled' } };
+    w.ipEnc = { class_type: 'VAEEncode', inputs: { pixels: ['ipPx', 0], vae: ['vae', 0] } };
+    w.ipMask = { class_type: 'LoadImageMask', inputs: { image: o.inpaint.mask, channel: 'red' } };
+    w.latent = { class_type: 'SetLatentNoiseMask', inputs: { samples: ['ipEnc', 0], mask: ['ipMask', 0] } };
+  }
   w.sample = { class_type: 'SamplerCustomAdvanced', inputs: { noise: ['noise', 0], guider: ['guider', 0], sampler: ['sampler', 0], sigmas: ['sigmas', 0], latent_image: ['latent', 0] } };
   w.decode = { class_type: 'VAEDecode', inputs: { samples: ['sample', 0], vae: ['vae', 0] } };
   w.save = { class_type: 'SaveImage', inputs: { images: ['decode', 0], filename_prefix: 'atelier/edit' } };
@@ -283,4 +395,4 @@ function wfEdit(o) {
   return w;
 }
 
-module.exports = { Comfy, wfGenerate, wfUpscale, wfEdit };
+module.exports = { Comfy, wfGenerate, wfUpscale, wfEdit, wfOutpaint, wfOutpaintUnion, wfTrainLora };
