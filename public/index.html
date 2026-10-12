@@ -16,6 +16,7 @@
       <button class="nav-btn" data-page="prompts"><svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg><span>Мои промпты</span></button>
       <button class="nav-btn" data-page="boards"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="10" rx="1.5"/><rect x="13" y="3" width="8" height="6" rx="1.5"/><rect x="13" y="11" width="8" height="10" rx="1.5"/><rect x="3" y="15" width="8" height="6" rx="1.5"/></svg><span>Доски</span></button>
       <button class="nav-btn" data-page="gallery"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span>Мои работы</span></button>
+      <button class="nav-btn" id="helpBtn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14"/><circle cx="12" cy="17" r=".6"/></svg><span>Как пользоваться</span></button>
     </nav>
     <div class="update-box" id="updateBox" hidden>
       <b>Доступна версия <span id="updVer"></span></b>
@@ -349,6 +350,15 @@
     </div>
   </div>
 
+  <div class="modal" id="tourMenu" hidden>
+    <div class="sp-box tour-menu">
+      <b>Как пользоваться Arto</b>
+      <p class="muted tr-hint">Выберите, что хотите узнать, — Arto сам покажет, куда нажимать, и что получится.</p>
+      <div class="tour-list" id="tourList"></div>
+      <div class="ed-row"><button class="btn" id="tourClose">Закрыть</button></div>
+    </div>
+  </div>
+
   <div class="modal" id="trainBox" hidden>
     <div class="sp-box tr-box">
       <b>Научить Arto вашей манере</b>
@@ -379,5 +389,6 @@
   <script src="paints.js"></script>
   <script src="editor.js"></script>
   <script src="app.js"></script>
+  <script src="tour.js"></script>
 </body>
 </html>

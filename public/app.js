@@ -700,7 +700,7 @@ function jobHTML(job) {
         ${job.type === 'studio' || job.type === 'upscale' ? '' : '<button class="btn star" data-a="save-prompt" title="Сохранить запрос в «Мои промпты»">☆</button>'}
         ${job.status === 'running' ? '' : '<button class="btn danger" data-a="delete-job" title="Удалить">✕</button>'}
       </div>
-      <div class="time">${job.status === 'running' ? `Рисую… ${done} из ${n}` : time}</div>
+      <div class="time">${job.status === 'running' ? (job.type === 'train' ? 'Обучаю…' : `Рисую… ${done} из ${n}`) : time}</div>
     </div>
   </article>`;
 }

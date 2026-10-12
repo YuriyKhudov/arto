@@ -605,3 +605,27 @@ body[data-page="boards"] .view-ctl { display: none; }
 .tr-box { width: min(560px, 100%); }
 .tr-hint { margin: 0; font-size: 13px; line-height: 1.5; }
 .tr-box #trBoard { width: 100%; }
+
+/* ===== подсказки «Как пользоваться» ===== */
+.tour-menu { width: min(560px, 100%); }
+.tour-list { display: flex; flex-direction: column; gap: 6px; max-height: 60vh; overflow: auto; }
+.tour-item { display: flex; align-items: center; gap: 14px; text-align: left; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-2); color: var(--text); cursor: pointer; }
+.tour-item:hover { border-color: var(--accent); background: var(--bg-3); }
+.tour-item b { display: block; font-size: 14px; }
+.tour-item small { color: var(--muted); font-size: 12.5px; }
+.tour-num { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--bg-3); color: var(--accent); font-weight: 600; font-size: 13px; }
+.tour-block { position: fixed; z-index: 1000; display: none; }
+.tour-spot { position: fixed; z-index: 1001; pointer-events: none; display: none; border-radius: 12px; border: 2px solid var(--accent);
+  box-shadow: 0 0 0 9999px rgba(6,6,8,.72), 0 0 18px 2px rgba(232,194,122,.45); transition: left .25s, top .25s, width .25s, height .25s; animation: tourPulse 1.6s ease-in-out infinite; }
+.tour-spot.empty { border: 0; animation: none; }
+.tour-card { position: fixed; z-index: 1002; display: none; width: min(360px, calc(100vw - 24px)); padding: 14px 16px; border-radius: var(--radius);
+  background: var(--bg-2); border: 1px solid var(--accent); box-shadow: 0 16px 40px rgba(0,0,0,.6); color: var(--text); }
+body.touring .tour-block, body.touring .tour-spot, body.touring .tour-card { display: block; }
+.tour-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.tour-n { font-size: 12px; color: var(--muted); }
+.tour-x { background: none; border: 0; color: var(--muted); font-size: 22px; line-height: 1; cursor: pointer; }
+.tour-title { display: block; font-size: 16px; color: var(--accent-2); margin-bottom: 6px; }
+.tour-card p { margin: 0 0 10px; font-size: 14px; line-height: 1.5; }
+.tour-card img { display: block; max-width: 100%; border-radius: 8px; margin-bottom: 10px; }
+.tour-foot { display: flex; justify-content: space-between; gap: 8px; }
+@keyframes tourPulse { 50% { box-shadow: 0 0 0 9999px rgba(6,6,8,.72), 0 0 28px 6px rgba(232,194,122,.7); } }
