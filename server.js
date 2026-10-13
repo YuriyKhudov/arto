@@ -563,7 +563,7 @@ async function fixFaces(buf, { src, s, prog, findOn = null }) {
 // ---------- сохранение фактуры ----------
 // ИИ-редактор перерисовывает всю картинку и сглаживает мазок. Берём из правки только изменённые места;
 // при retexture — ещё и «перемазываем» их моделью-художником в манере оригинала (оригинал = образец стиля).
-async function keepTexture(orig, edited, { retexture = false, prompt = '', negative = '', seed = 1, prog, maxChange = null } = {}) {
+async function keepTexture(orig, edited, { retexture = false, prompt = '', negative = '', seed = 1, prog, maxChange = null, denoise = 0.3 } = {}) {
   let r;
   try { r = await texture().preserveTexture(orig, edited); } catch (e) { logError('Сохранение фактуры', e); return edited; }
   // правка, которая не должна менять стиль (исправление анатомии), перерисовала почти всё — отбрасываем её
@@ -577,10 +577,11 @@ async function keepTexture(orig, edited, { retexture = false, prompt = '', negat
   const st = sr ? await comfy.upload(orig, `tex_${Date.now()}_s.${sniffExt(orig)}`) : null;
   const re = await comfy.run(wfGenerate({
     ckpt: await model('checkpoints', g.ckpt), loras: [],
-    prompt: (prompt || 'artwork') + ', same medium and technique, expressive brushwork, rich tactile texture, visible strokes',
-    negative: [negative, 'smooth, airbrushed, plastic, blurry, cgi, 3d render'].filter(Boolean).join(', '),
+    // техника — из описания самой картинки (графит, масло…), а не общие «живописные» слова
+    prompt: (prompt ? prompt + ', ' : 'artwork, ') + 'the same medium, technique and strokes everywhere, consistent texture',
+    negative: [negative, 'smooth, airbrushed, plastic, blurry, cgi, 3d render, clipart, vector art, sticker, cartoon, flat shading, clean outlines'].filter(Boolean).join(', '),
     width: W, height: H, seed, steps: Math.max(10, g.steps + 4), cfg: g.cfg, sampler: g.sampler, scheduler: g.scheduler,
-    refImage: comp, denoise: 0.3,
+    refImage: comp, denoise,
     styleRefs: st ? [st] : null, styleWeights: [1], styleWeight: 0.8,
     style: st ? { ...sr, endAt: 1, ipadapter: await model('ipadapter', sr.ipadapter), clipVision: await model('clip_vision', sr.clipVision) } : null, // фактура — до последнего шага
   }), { onProgress: prog });
@@ -606,7 +607,11 @@ function createEdit({ instruction, sources, count, from, isTemp, preserve = true
     const en = await editInstruction(instruction, img.index);
     img.finalPrompt = en; // «как ИИ понял запрос» — видно в подробностях
     const out = await runEdit({ names, firstBuf: sources[0], instruction: en, seed: img.seed, prog });
-    return preserve && sources.length === 1 ? keepTexture(sources[0], out) : out;
+    if (!(preserve && sources.length === 1)) return out;
+    // ИИ-редактор рисует новое в своей манере (гладко, «наклейкой»): перерисовать изменённые места в технике оригинала
+    const src = from?.jobId ? findJob(from.jobId) : null;
+    const si = src?.images?.[from.index];
+    return keepTexture(sources[0], out, { retexture: true, prompt: si?.finalPrompt || '', negative: src?.negative || '', seed: img.seed, prog, denoise: 0.45 });
   });
 }
 
