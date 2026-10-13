@@ -173,13 +173,16 @@ function wfGenerate(o) {
     const k = (o.styleWeight ?? 1) / Math.sqrt(Math.max(1, refs.length));
     refs.forEach((r, i) => {
       w['sl' + i] = { class_type: 'LoadImage', inputs: { image: r.name } };
-      w['sp' + i] = { class_type: 'PrepImageForClipVision', inputs: { image: ['sl' + i, 0], interpolation: 'LANCZOS', crop_position: 'center', sharpening: 0 } };
+      // endAt: образец ведёт только первые шаги (композиция, тон, характер), мелкий штрих модель дорисовывает сама —
+      // иначе на последних шагах образец превращает штриховку в плоские пятна (проверено)
+      // «по плиткам»: образец режется на куски, а не сжимается целиком в квадрат 224 px — модель видит характер рисунка
+      if (!s.tiled) w['sp' + i] = { class_type: 'PrepImageForClipVision', inputs: { image: ['sl' + i, 0], interpolation: 'LANCZOS', crop_position: 'center', sharpening: 0 } };
       w['ipadv' + i] = {
-        class_type: 'IPAdapterAdvanced',
+        class_type: s.tiled ? 'IPAdapterTiled' : 'IPAdapterAdvanced',
         inputs: {
-          model, ipadapter: ['ipa', 0], image: ['sp' + i, 0], clip_vision: ['cv', 0],
+          model, ipadapter: ['ipa', 0], image: [s.tiled ? 'sl' + i : 'sp' + i, 0], clip_vision: ['cv', 0],
           weight: +(k * r.w).toFixed(3), weight_type: s.weightType || 'style transfer',
-          combine_embeds: 'concat', start_at: 0, end_at: 1, embeds_scaling: 'V only',
+          combine_embeds: 'concat', start_at: 0, end_at: s.endAt ?? 1, embeds_scaling: 'V only', ...(s.tiled ? { sharpening: 0 } : {}),
         },
       };
       model = ['ipadv' + i, 0];
@@ -314,7 +317,9 @@ function wfUpscale(o) {
     load: { class_type: 'LoadImage', inputs: { image: o.image } },
     um: { class_type: 'UpscaleModelLoader', inputs: { model_name: o.model } },
     up: { class_type: 'ImageUpscaleWithModel', inputs: { upscale_model: ['um', 0], image: ['load', 0] } },
-    save: { class_type: 'SaveImage', inputs: { images: ['up', 0], filename_prefix: 'atelier/up' } },
+    // модель ×4 — сразу привести к ×2
+    ...(/4x/i.test(o.model) ? { half: { class_type: 'ImageScaleBy', inputs: { image: ['up', 0], upscale_method: 'lanczos', scale_by: 0.5 } } } : {}),
+    save: { class_type: 'SaveImage', inputs: { images: [/4x/i.test(o.model) ? 'half' : 'up', 0], filename_prefix: 'atelier/up' } },
   };
 }
 

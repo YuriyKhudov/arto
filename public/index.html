@@ -79,21 +79,21 @@
           <b>Стиль с картинок</b>
           <span class="muted">возьмёт манеру, палитру и фактуру — не содержимое</span>
           <div class="st-mine">
-            <select id="myStyles"><option value="">Мои стили…</option></select>
-            <button class="btn" id="saveStyle">Сохранить стиль</button>
+            <select id="myStyles"><option value="">Мои подборки…</option></select>
+            <button class="btn" id="saveStyle">Сохранить подборку</button>
           </div>
         </div>
         <div class="ml-row">
-          <label class="pick"><span>Моя манера</span>
+          <label class="pick"><span>Мой стиль</span>
             <select id="myLora"><option value="">— нет —</option></select></label>
           <label class="slider ml-power" id="myLoraPowerWrap" hidden>
-            <span>Насколько в вашей манере</span>
+            <span>Насколько в вашем стиле</span>
             <input type="range" id="myLoraPower" min="0.4" max="1.2" step="0.05" value="0.8">
             <small class="scale"><em>меньше стиля</em><b id="vMl"></b><em>больше стиля</em></small>
           </label>
           <button class="btn" id="trainOpen">Обучить на моих картинах…</button>
         </div>
-        <p class="ml-note" id="mlNote" hidden>Выбрана ваша манера — она сама задаёт технику, свет и фактуру. Техника и картинки-образцы сейчас не нужны: просто опишите, что нарисовать.</p>
+        <p class="ml-note" id="mlNote" hidden>Выбран ваш стиль — он сам задаёт технику, свет и фактуру. Техника и картинки-образцы сейчас не нужны: просто опишите, что нарисовать.</p>
         <div id="stRefs">
         <div class="st-slots" id="styleSlots"></div>
         <label class="slider st-power">
@@ -370,7 +370,7 @@
 
   <div class="modal" id="trainBox" hidden>
     <div class="sp-box tr-box">
-      <b>Научить Arto вашей манере</b>
+      <b>Научить Arto вашему стилю</b>
       <p class="muted tr-hint">Загрузите 15–30 своих работ в одной манере, но с разными сюжетами: портреты, пейзажи, предметы (минимум 5). Если все работы — портреты, Arto и рыбака у лодки нарисует портретом. Arto выучит вашу руку: мазок, цвет, характер линии — и сможет рисовать новые сюжеты так, как рисуете вы.</p>
       <label class="field"><span>Название</span><input id="trName" maxlength="50" placeholder="например: Мои пейзажи маслом"></label>
       <div class="field"><span>Откуда взять картинки</span>

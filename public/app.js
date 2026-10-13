@@ -19,7 +19,7 @@ const EXAMPLES = [
   'натюрморт с гранатами и медным кувшином',
   'заброшенная оранжерея, заросшая лианами',
 ];
-const KIND = { upscale: 'Увеличено ×2', edit: 'Изменение', studio: 'Из редактора', outpaint: 'Раскрытый кадр', train: 'Обучение манеры' };
+const KIND = { upscale: 'Увеличено ×2', edit: 'Изменение', studio: 'Из редактора', outpaint: 'Раскрытый кадр', train: 'Обучение стиля' };
 
 const state = {
   styles: [], edition: {}, engine: {}, jobs: [],
@@ -171,7 +171,7 @@ const LEVELS = {
 
 function syncControls() {
   const p = state.params;
-  if (state.styles.length && !state.styles.some((st) => st.id === p.style)) p.style = p.style === 'gouache' ? 'oil' : 'graphite'; // техника убрана
+  if (state.styles.length && !state.styles.some((st) => st.id === p.style)) p.style = { gouache: 'oil' }[p.style] || 'graphite'; // техника убрана
   $('#style').value = p.style;
   $$('#formatSeg button').forEach((b) => b.classList.toggle('on', b.dataset.ar === p.ar));
   $$('#countSeg button').forEach((b) => b.classList.toggle('on', +b.dataset.v === +p.count));
@@ -244,7 +244,7 @@ async function loadMyLoras() {
   try { state.myLoras = await api('/api/loras'); } catch { state.myLoras = []; }
   const cur = $('#myLora').value;
   $('#myLora').innerHTML = '<option value="">— нет —</option>' + state.myLoras.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('')
-    + (state.myLoras.length ? '<option value="__del">— удалить манеру…</option>' : '');
+    + (state.myLoras.length ? '<option value="__del">— удалить стиль…</option>' : '');
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem('arto.manner') || '{}'); } catch {}
   const want = cur || saved.id;
@@ -275,8 +275,8 @@ function bindTrain() {
     if (e.target.value === '__del') {
       e.target.value = '';
       const list = state.myLoras.map((l, i) => (i + 1) + '. ' + l.name).join('\n');
-      const l = state.myLoras[+prompt('Какую манеру удалить? Введите номер:\n' + list) - 1];
-      if (l && confirm('Удалить манеру «' + l.name + '»?')) { await api('/api/loras/' + l.id, null, 'DELETE'); await loadMyLoras(); }
+      const l = state.myLoras[+prompt('Какой стиль удалить? Введите номер:\n' + list) - 1];
+      if (l && confirm('Удалить стиль «' + l.name + '»?')) { await api('/api/loras/' + l.id, null, 'DELETE'); await loadMyLoras(); }
     }
     if (e.target.value) $('#styleBtn').classList.add('on');
     renderManner();
@@ -310,7 +310,7 @@ function bindTrain() {
   };
   $('#trCancel').onclick = () => ($('#trainBox').hidden = true);
   $('#trGo').onclick = async () => {
-    const name = $('#trName').value.trim() || 'Моя манера';
+    const name = $('#trName').value.trim() || 'Мой стиль';
     const body = { name, quality, ...(source === 'board' ? { boardId: $('#trBoard').value } : { images: files }) };
     try {
       $('#trGo').disabled = true;
@@ -389,7 +389,7 @@ const styleRefPayload = () => ($('#myLora').value ? [] : state.styleRefs).map((r
 
 async function loadMyStyles() {
   try { state.myStyles = await api('/api/styles'); } catch { state.myStyles = []; }
-  $('#myStyles').innerHTML = '<option value="">Мои стили…</option>'
+  $('#myStyles').innerHTML = '<option value="">Мои подборки…</option>'
     + state.myStyles.map((s) => `<option value="${s.id}">${esc(s.name)} (${s.files.length})</option>`).join('')
     + (state.myStyles.length ? '<option value="__del">— удалить стиль…</option>' : '');
 }
@@ -637,7 +637,7 @@ function chipsHTML(job) {
   if (p.no) chips.push('без: ' + p.no);
   if (job.usedReference) chips.push('от картинки');
   if (job.control) chips.push(job.control.mode === 'photo' ? 'по контуру фото' : 'по наброску');
-  if (p.myLora) { const ml = (state.myLoras || []).find((x) => x.id === p.myLora.id); chips.push(job.mannerName || ml ? 'манера: ' + (job.mannerName || ml.name) : 'своя манера'); }
+  if (p.myLora) { const ml = (state.myLoras || []).find((x) => x.id === p.myLora.id); chips.push(job.mannerName || ml ? 'мой стиль: ' + (job.mannerName || ml.name) : 'мой стиль'); }
   if (p.series) chips.unshift(`серия ${p.series.n}/${p.series.of}`);
   return chips.map((c) => `<span class="chip">${esc(c)}</span>`).join('');
 }
@@ -1178,7 +1178,7 @@ function bindEvents() {
       e.target.value = '';
       const names = state.myStyles.map((s, i) => (i + 1) + '. ' + s.name).join('\n');
       const st = state.myStyles[+prompt('Какой стиль удалить? Введите номер:\n' + names) - 1];
-      if (st && confirm('Удалить стиль «' + st.name + '»?')) { await api('/api/styles/' + st.id, null, 'DELETE'); await loadMyStyles(); }
+      if (st && confirm('Удалить подборку «' + st.name + '»?')) { await api('/api/styles/' + st.id, null, 'DELETE'); await loadMyStyles(); }
       return;
     }
     const st = state.myStyles.find((x) => x.id === v);

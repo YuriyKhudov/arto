@@ -95,7 +95,7 @@ function Need($folder, $name, $url, $what) {
 }
 
 $HF = "https://huggingface.co"
-$up = Need "upscale_models" "RealESRGAN_x2plus.pth" "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth" "увеличитель ×2 (64 МБ)"
+$up = Need "upscale_models" "4x_NMKD-Siax_200k.pth" "$HF/uwg/upscaler/resolve/main/ESRGAN/4x_NMKD-Siax_200k.pth" "увеличитель, бережный к штриху (64 МБ)"
 if ($Edition -eq "pro") {
   $ckpt = Need "checkpoints" "DreamShaperXL_Turbo_v2_1.safetensors" "$HF/Lykon/dreamshaper-xl-v2-turbo/resolve/main/DreamShaperXL_Turbo_v2_1.safetensors" "художник DreamShaper XL (6,5 ГБ)"
   # редактор: если уже есть полная модель + ускоритель — используем их, иначе качаем компактную версию со встроенным ускорителем

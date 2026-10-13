@@ -16,7 +16,10 @@
         "sampler": "dpmpp_sde",
         "scheduler": "karras"
       },
-      "upscale": "RealESRGAN_x2plus.pth",
+      "upscale": [
+        "4x_NMKD-Siax_200k.pth",
+        "RealESRGAN_x2plus.pth"
+      ],
       "edit": {
         "unet": "qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning_comfyui_4steps_v1.0.safetensors",
         "dtype": "default",
@@ -30,7 +33,9 @@
         "ipadapter": "ip-adapter-plus_sdxl_vit-h.safetensors",
         "clipVision": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors",
         "weightType": "style transfer precise",
-        "weightScale": 0.6
+        "weightScale": 0.85,
+        "tiled": true,
+        "endAt": 0.4
       },
       "control": {
         "union": "diffusion_pytorch_model_promax.safetensors"
@@ -46,7 +51,10 @@
         "sampler": "lcm",
         "scheduler": "sgm_uniform"
       },
-      "upscale": "RealESRGAN_x2plus.pth",
+      "upscale": [
+        "4x_NMKD-Siax_200k.pth",
+        "RealESRGAN_x2plus.pth"
+      ],
       "edit": {
         "kind": "flux2",
         "unet": "flux-2-klein-4b-fp8.safetensors",

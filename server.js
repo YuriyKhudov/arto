@@ -265,7 +265,9 @@ async function createImagine({ prompt, params, ref, variation, styles = [], cont
       model: await model('controlnet', cc.union || (job.control.mode === 'photo' ? cc.photo : cc.sketch)),
     } : null;
     const sr = edition.styleRef;
-    const style = styleNames && sr ? { ...sr, ipadapter: await model('ipadapter', sr.ipadapter), clipVision: await model('clip_vision', sr.clipVision) } : null;
+    // endAt — доля шагов; при рисовании от картинки (denoise < 1) шаги начинаются не с нуля — пересчитать
+    const d = refName ? denoise : 1;
+    const style = styleNames && sr ? { ...sr, endAt: sr.endAt != null ? (1 - d) + d * sr.endAt : undefined, ipadapter: await model('ipadapter', sr.ipadapter), clipVision: await model('clip_vision', sr.clipVision) } : null;
     const ml = p.myLora && myLoras.find((x) => x.id === p.myLora.id);
     const loras = ml ? [{ name: await model('loras', ml.file), strength: Math.max(0, Math.min(1.5, +p.myLora.w || 0.8)) }] : [];
     const out = await comfy.run(wfGenerate({
@@ -529,7 +531,7 @@ async function keepTexture(orig, edited, { retexture = false, prompt = '', negat
     width: W, height: H, seed, steps: Math.max(10, g.steps + 4), cfg: g.cfg, sampler: g.sampler, scheduler: g.scheduler,
     refImage: comp, denoise: 0.3,
     styleRefs: st ? [st] : null, styleWeights: [1], styleWeight: 0.8,
-    style: st ? { ...sr, ipadapter: await model('ipadapter', sr.ipadapter), clipVision: await model('clip_vision', sr.clipVision) } : null,
+    style: st ? { ...sr, endAt: 1, ipadapter: await model('ipadapter', sr.ipadapter), clipVision: await model('clip_vision', sr.clipVision) } : null, // фактура — до последнего шага
   }), { onProgress: prog });
   return texture().blendByMask(r.buf, re, r.mask, r.W, r.H);
 }
@@ -640,7 +642,7 @@ function createTrain({ name, sources, quality = 'normal' }) {
   // ~2–3 с на шаг на видеокарте уровня RTX 4080: быстро 15–25 мин, качественно 25–50 мин
   const steps = quality === 'fast' ? Math.min(600, Math.max(300, n * 20)) : Math.min(1200, Math.max(600, n * 40));
   const job = baseJob('train', {
-    prompt: 'Обучение манеры «' + name + '»', rawPrompt: '', params: { steps, count: 1, width: size, height: size },
+    prompt: 'Обучение стиля «' + name + '»', rawPrompt: '', params: { steps, count: 1, width: size, height: size },
     images: [{ index: 0, finalPrompt: '', seed: 1, file: null, error: null, liked: false }],
     trainName: name,
   });
@@ -662,7 +664,7 @@ function createTrain({ name, sources, quality = 'normal' }) {
     // 3) перенести файл LoRA из output ComfyUI в его папку моделей
     const outDir = path.join(config.comfy.path, 'ComfyUI', 'output', 'loras', 'arto');
     const made = fs.readdirSync(outDir).filter((f) => f.startsWith(slug)).sort().pop();
-    if (!made) throw new Error('Обучение завершилось, но файл манеры не найден');
+    if (!made) throw new Error('Обучение завершилось, но файл стиля не найден');
     const dstDir = path.join(config.comfy.path, 'ComfyUI', 'models', 'loras', 'arto');
     fs.mkdirSync(dstDir, { recursive: true });
     const file = slug + '.safetensors';
@@ -806,7 +808,7 @@ const server = http.createServer(async (req, res) => {
         bufs = (b?.items || []).map((it) => fs.readFileSync(path.join(IMAGES, it.file)));
       } else bufs = (body.images || []).map(dataUriToBuffer).filter(Boolean);
       if (bufs.length < 5) return send(res, 400, { error: 'Нужно хотя бы 5 картинок (лучше 15–30)' });
-      return send(res, 200, createTrain({ name: String(body.name || 'Моя манера').slice(0, 50), sources: bufs.slice(0, 60), quality: body.quality }));
+      return send(res, 200, createTrain({ name: String(body.name || 'Мой стиль').slice(0, 50), sources: bufs.slice(0, 60), quality: body.quality }));
     }
     const lm = /^\/api\/loras\/([\w-]+)$/.exec(p);
     if (lm && req.method === 'DELETE') {

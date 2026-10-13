@@ -14,17 +14,14 @@
 const STYLES = [
   { id: 'raw', name: 'Raw', hint: 'Без стиля — только ваш промпт', core: '' },
   { id: 'graphite', name: 'Графит', hint: 'Карандашный штудийный рисунок', kind: 'drawing', mono: true,
-    core: 'graphite pencil drawing, precise pencil lines, fine hatching and cross-hatching, graphite shading built from pencil strokes, on white drawing paper',
-    avoid: 'paint, painting, brush strokes, paint daubs, blotches, watercolor, gouache, oil paint, ink wash, color, colorful, smudged blobs, airbrush' },
+    core: 'graphite pencil sketch, sketchy directional pencil strokes, parallel hatching, visible individual pencil strokes, shading built from strokes, unfinished edges, on white drawing paper',
+    avoid: 'paint, painting, brush strokes, paint daubs, blotches, watercolor, gouache, oil paint, ink wash, color, colorful, smudged blobs, airbrush, smooth blending, engraving' },
   { id: 'charcoal', name: 'Уголь', hint: 'Мощный тональный рисунок углём', kind: 'drawing', mono: true,
-    core: 'charcoal drawing, bold charcoal strokes, rich charcoal blacks, smudged charcoal tones, eraser highlights, on textured drawing paper',
+    core: 'charcoal drawing, bold visible charcoal strokes, rich charcoal blacks, smudged charcoal tones, eraser highlights, grainy paper texture, on textured drawing paper',
     avoid: 'paint, painting, brush strokes, paint daubs, watercolor, gouache, oil paint, color, colorful, digital painting, smooth airbrush gradients' },
   { id: 'ink', name: 'Тушь и перо', hint: 'Линия, штрих, пятно туши', kind: 'drawing', mono: true,
     core: 'pen and black ink drawing, confident ink linework, varied line weight, ink hatching, solid black ink areas, on white paper',
     avoid: 'paint, painting, color, colorful, watercolor, gouache, oil paint, pencil shading, soft grey gradients, airbrush, blurry' },
-  { id: 'sanguine', name: 'Сангина', hint: 'Красный мел на тонированной бумаге', w: 1.4, kind: 'drawing',
-    core: 'monochrome sanguine drawing in red-brown chalk only, red chalk hatching, white chalk highlights, on warm toned paper, old master study',
-    avoid: 'paint, painting, brush strokes, oil paint, watercolor, gouache, full color, colorful, blue sky, green grass, digital painting' },
   { id: 'watercolor', name: 'Акварель', hint: 'Лёгкий акварельный эскиз', kind: 'painting',
     core: 'watercolor painting, transparent watercolor washes, wet-on-wet blooms, soft bleeding edges, light pencil underdrawing, white of the paper left untouched, on cold press watercolor paper',
     avoid: 'oil paint, impasto, thick opaque paint, gouache, acrylic, digital painting, heavy black outlines' },
@@ -114,7 +111,7 @@ const GUARDS = [
 ];
 
 // убранные техники → ближайшая (старые работы и сохранённые настройки не ломаются)
-const RETIRED = { gouache: 'oil' };
+const RETIRED = { gouache: 'oil', sanguine: 'graphite' };
 
 function mulberry32(a) {
   return function () {
