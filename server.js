@@ -196,6 +196,54 @@ async function prepareSketch(buf) {
   return sharp(buf).flatten({ background: '#ffffff' }).grayscale().normalize().negate().linear(1.6, -60).png().toBuffer();
 }
 
+// настройки адаптера стиля; endAt — доля шагов, при рисовании от картинки (denoise < 1) шаги начинаются не с нуля
+async function styleCfg(d = 1) {
+  const sr = edition.styleRef;
+  return { ...sr, endAt: sr.endAt != null ? (1 - d) + d * sr.endAt : undefined, ipadapter: await model('ipadapter', sr.ipadapter), clipVision: await model('clip_vision', sr.clipVision) };
+}
+// добавить к образцам художника работы «по вкусу»
+const TASTE_W = 0.75;
+async function withTaste(job, o) {
+  if (!job.tasteFiles?.length) return o;
+  if (!job.tasteNames) {
+    job.tasteNames = [];
+    for (const f of job.tasteFiles) job.tasteNames.push(await comfy.upload(fs.readFileSync(path.join(IMAGES, f)), `taste_${f}`));
+    if (job.tasteNeg && fs.existsSync(path.join(IMAGES, job.tasteNeg))) job.tasteNegName = await comfy.upload(fs.readFileSync(path.join(IMAGES, job.tasteNeg)), `taste_neg_${job.tasteNeg}`);
+  }
+  const own = o.styleRefs || [];
+  return {
+    styleRefs: [...own, ...job.tasteNames],
+    // свои образцы — как выставил художник, вкус — половина их силы; без своих образцов — мягкая общая сила
+    styleWeights: [...(o.styleWeights || []).slice(0, own.length), ...job.tasteNames.map(() => (own.length ? 0.5 : 1))],
+    styleWeight: own.length ? o.styleWeight : TASTE_W * (edition.styleRef?.weightScale ?? 1),
+    styleNegative: job.tasteNegName || null,
+  };
+}
+
+// ---------- «Мой вкус»: оценки художника → мягкие образцы стиля ----------
+// Берём понравившиеся работы В ТОЙ ЖЕ ТЕХНИКЕ с самым похожим сюжетом (и одну «не ту» — как образец «не так»).
+const STOP = new Set('the and with for from into onto over under near its his her their this that are was were has have very of on in at to by an a'.split(' '));
+const words = (t) => new Set(String(t || '').toLowerCase().replace(/\([^:)]*:[\d.]+\)/g, ' ').split(/[^a-zа-яё]+/).filter((w) => w.length > 2 && !STOP.has(w)));
+function tasteRefs(subjectEn, style) {
+  const want = words(subjectEn);
+  const liked = [], disliked = [];
+  for (const j of gallery) {
+    if (!['imagine', 'variation', 'upscale', 'outpaint'].includes(j.type) || (j.edition && j.edition !== edition.id)) continue;
+    if ((j.params?.style || 'raw') !== (style || 'raw') || j.params?.myLora) continue;
+    for (const im of j.images) {
+      if (!im.file || (!im.liked && !im.disliked)) continue;
+      const have = words(j.subjectEn || im.finalPrompt || j.prompt);
+      let common = 0;
+      for (const w of want) if (have.has(w)) common++;
+      const score = common / Math.max(1, want.size) + j.createdAt / 1e15; // при равенстве — свежее
+      (im.liked ? liked : disliked).push({ file: im.file, score });
+    }
+  }
+  liked.sort((a, b) => b.score - a.score);
+  disliked.sort((a, b) => b.score - a.score);
+  return { liked: liked.slice(0, 3).map((x) => x.file), disliked: disliked[0]?.file || null, total: liked.length };
+}
+
 async function createImagine({ prompt, params, ref, variation, styles = [], control = null }) {
   const inline = parseInlineParams(prompt);
   const p = { ...params, ...inline.params };
@@ -226,6 +274,7 @@ async function createImagine({ prompt, params, ref, variation, styles = [], cont
     params: { ...p, seed, count, width, height, quality: q },
     usedReference: !!refBuf,
     mannerName: mlEntry ? mlEntry.name : undefined,
+    subjectEn,
     styleFiles: [],
     negative: built.negative,
     images: built.prompts.map((fp, i) => ({ index: i, finalPrompt: fp, seed: seed + i, file: null, error: null, liked: false })),
@@ -243,6 +292,9 @@ async function createImagine({ prompt, params, ref, variation, styles = [], cont
   const sw0 = Number.isFinite(+p.sw) ? Math.max(0, Math.min(2, +p.sw)) : 1;
   // ползунок 0…2 → реальная сила: выше ~1.2 стиль с картинок начинает тащить содержимое образца и «перемазывать» технику (проверено)
   const sw = sw0 * (edition.styleRef?.weightScale ?? 1);
+  // «Мой вкус»: понравившиеся работы — мягкие образцы (с образцами художника — ещё мягче), «не та» — образец «не так»
+  const taste = p.taste && edition.styleRef && !mlEntry ? tasteRefs(subjectEn, p.style) : null;
+  if (taste?.liked.length) { job.tasteFiles = taste.liked; job.tasteNeg = taste.disliked; }
 
   let refName = null;
   let styleNames = null;
@@ -266,8 +318,7 @@ async function createImagine({ prompt, params, ref, variation, styles = [], cont
     } : null;
     const sr = edition.styleRef;
     // endAt — доля шагов; при рисовании от картинки (denoise < 1) шаги начинаются не с нуля — пересчитать
-    const d = refName ? denoise : 1;
-    const style = styleNames && sr ? { ...sr, endAt: sr.endAt != null ? (1 - d) + d * sr.endAt : undefined, ipadapter: await model('ipadapter', sr.ipadapter), clipVision: await model('clip_vision', sr.clipVision) } : null;
+    const style = styleNames && sr ? await styleCfg(refName ? denoise : 1) : null;
     const ml = p.myLora && myLoras.find((x) => x.id === p.myLora.id);
     const loras = ml ? [{ name: await model('loras', ml.file), strength: Math.max(0, Math.min(1.5, +p.myLora.w || 0.8)) }] : [];
     const out = await comfy.run(wfGenerate({
@@ -275,7 +326,7 @@ async function createImagine({ prompt, params, ref, variation, styles = [], cont
       prompt: img.finalPrompt, negative: built.negative, width, height, seed: img.seed,
       steps: g.steps, cfg: g.cfg, sampler: g.sampler, scheduler: g.scheduler,
       refImage: refName, denoise,
-      styleRefs: styleNames, styleWeights: job.styleWeights, style, styleWeight: sw, control,
+      ...(await withTaste(job, { styleRefs: styleNames, styleWeights: job.styleWeights, styleWeight: sw })), style: style || (job.tasteFiles ? await styleCfg(refName ? denoise : 1) : null), control,
     }), { onProgress: prog });
     if (q !== 'high') return out;
     const up = await comfy.upload(out, `${job.id}_hq${img.index}.png`);
@@ -669,16 +720,71 @@ function createTrain({ name, sources, quality = 'normal' }) {
     fs.mkdirSync(dstDir, { recursive: true });
     const file = slug + '.safetensors';
     fs.copyFileSync(path.join(outDir, made), path.join(dstDir, file));
-    const entry = { id, name, file, trigger: slug, images: n, steps, createdAt: Date.now(), edition: edition.id };
+    const entry = { id, name, file, trigger: slug, images: n, steps, createdAt: Date.now(), edition: edition.id, base: g.ckpt, trainJob: job.id };
     myLoras.unshift(entry);
     saveLoras();
     modelCache['loras|' + file] = undefined;
     // 4) пробная картинка в новой манере
     return comfy.run(wfGenerate({
-      ckpt: await model('checkpoints', g.ckpt), loras: [{ name: await model('loras', file), strength: 1 }],
+      ckpt: await model('checkpoints', g.ckpt), loras: [{ name: await model('loras', file), strength: 0.8 }],
       prompt: `${slug} style artwork, a quiet still life with a vase and fruit on a table`, negative: '',
       width: size, height: size, seed: 11, steps: g.steps, cfg: g.cfg, sampler: g.sampler, scheduler: g.scheduler,
     }));
+  });
+}
+
+// ---------- обмен стилями: один файл .artostyle ----------
+// Формат: «ARTOSTY1» + длина и JSON с описанием + длина и картинка-пример + сам файл стиля (LoRA).
+const LORA_DIR = () => path.join(config.comfy.path, 'ComfyUI', 'models', 'loras', 'arto');
+function stylePreview(e) {
+  if (e.preview && fs.existsSync(path.join(IMAGES, e.preview))) return e.preview;
+  const j = gallery.find((x) => x.id === e.trainJob) || gallery.find((x) => x.type === 'train' && x.trainName === e.name);
+  return j?.images[0]?.file || null;
+}
+function exportStyle(e) {
+  const lora = fs.readFileSync(path.join(LORA_DIR(), e.file));
+  const pv = stylePreview(e);
+  const prev = pv && fs.existsSync(path.join(IMAGES, pv)) ? fs.readFileSync(path.join(IMAGES, pv)) : Buffer.alloc(0);
+  const meta = Buffer.from(JSON.stringify({ name: e.name, trigger: e.trigger, edition: e.edition || edition.id, base: e.base || edition.generate.ckpt, images: e.images, steps: e.steps, createdAt: e.createdAt, app: 'Arto' }));
+  const n = (x) => { const b = Buffer.alloc(4); b.writeUInt32LE(x); return b; };
+  return Buffer.concat([Buffer.from('ARTOSTY1'), n(meta.length), meta, n(prev.length), prev, lora]);
+}
+function importStyle(buf) {
+  if (buf.length < 16 || buf.subarray(0, 8).toString() !== 'ARTOSTY1') throw new Error('Это не файл стиля Arto (.artostyle)');
+  let o = 8;
+  const ml = buf.readUInt32LE(o); o += 4;
+  const meta = JSON.parse(buf.subarray(o, o + ml).toString('utf8')); o += ml;
+  const pl = buf.readUInt32LE(o); o += 4;
+  const prev = buf.subarray(o, o + pl); o += pl;
+  const lora = buf.subarray(o);
+  if (!/^arto[\w]+$/.test(meta.trigger || '') || lora.length < 1e6) throw new Error('Файл стиля повреждён');
+  // стиль обучен под конкретную модель-художника: из Pro не работает в Lite и наоборот
+  if ((meta.edition || 'pro') !== edition.id) {
+    throw new Error(`Этот стиль обучен для Arto ${meta.edition === 'lite' ? 'Lite' : 'Pro'}, а у вас ${edition.title || edition.id}. Он подойдёт только для такой же версии.`);
+  }
+  const have = myLoras.find((x) => x.trigger === meta.trigger);
+  if (have) throw new Error(`Стиль «${have.name}» у вас уже есть`);
+  fs.mkdirSync(LORA_DIR(), { recursive: true });
+  const file = meta.trigger + '.safetensors';
+  fs.writeFileSync(path.join(LORA_DIR(), file), lora);
+  const id = newId();
+  const entry = {
+    id, name: String(meta.name || 'Стиль').slice(0, 50), file, trigger: meta.trigger, images: meta.images, steps: meta.steps,
+    createdAt: Date.now(), edition: edition.id, base: meta.base, imported: true,
+    preview: prev.length ? saveImage(`style_${id}`, prev) : null,
+  };
+  myLoras.unshift(entry);
+  saveLoras();
+  modelCache['loras|' + file] = undefined;
+  return entry;
+}
+function readRaw(req, limit) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => { size += c.length; if (size > limit) { reject(new Error('Слишком большой файл')); req.destroy(); } else chunks.push(c); });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
   });
 }
 
@@ -799,7 +905,22 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, job);
     }
 
-    if (p === '/api/loras' && req.method === 'GET') return send(res, 200, myLoras.filter((x) => !x.edition || x.edition === edition.id));
+    if (p === '/api/loras' && req.method === 'GET') return send(res, 200, myLoras.filter((x) => !x.edition || x.edition === edition.id).map((x) => ({ ...x, preview: stylePreview(x) })));
+    if (p === '/api/loras/import' && req.method === 'POST') {
+      try { return send(res, 200, importStyle(await readRaw(req, 1024 * 1024 * 1024))); } catch (e) { return send(res, 400, { error: e.message }); }
+    }
+    const le = /^\/api\/loras\/([\w-]+)\/export$/.exec(p);
+    if (le && req.method === 'GET') {
+      const e = myLoras.find((x) => x.id === le[1]);
+      if (!e) return send(res, 404, { error: 'Не найдено' });
+      const buf = exportStyle(e);
+      const fname = e.name.replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'стиль';
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream', 'Content-Length': buf.length, 'Cache-Control': 'no-store',
+        'Content-Disposition': `attachment; filename="arto-style.artostyle"; filename*=UTF-8''${encodeURIComponent(fname)}.artostyle`,
+      });
+      return res.end(buf);
+    }
     if (p === '/api/train' && req.method === 'POST') {
       const body = await readBody(req, 300 * 1024 * 1024);
       let bufs = [];
@@ -953,11 +1074,12 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, { ok: true });
       }
     }
-    if ((m = /^\/api\/jobs\/([\w-]+)\/(\d+)\/(like|delete)$/.exec(p)) && req.method === 'POST') {
+    if ((m = /^\/api\/jobs\/([\w-]+)\/(\d+)\/(like|dislike|delete)$/.exec(p)) && req.method === 'POST') {
       const job = gallery.find((j) => j.id === m[1]);
       const img = job?.images[+m[2]];
       if (!img) return send(res, 404, { error: 'Не найдено' });
-      if (m[3] === 'like') img.liked = !img.liked;
+      if (m[3] === 'like') { img.liked = !img.liked; if (img.liked) img.disliked = false; }
+      else if (m[3] === 'dislike') { img.disliked = !img.disliked; if (img.disliked) img.liked = false; }
       else {
         const f = img.file;
         img.file = null;

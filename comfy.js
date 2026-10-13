@@ -171,6 +171,7 @@ function wfGenerate(o) {
     // каждый образец — свой адаптер со своим «влиянием»; общий вес делим, чтобы сумма не пересиливала промпт
     const refs = o.styleRefs.map((name, i) => ({ name, w: o.styleWeights?.[i] ?? 1 })).filter((r) => r.w > 0);
     const k = (o.styleWeight ?? 1) / Math.sqrt(Math.max(1, refs.length));
+    if (o.styleNegative) w.sneg = { class_type: 'LoadImage', inputs: { image: o.styleNegative } };
     refs.forEach((r, i) => {
       w['sl' + i] = { class_type: 'LoadImage', inputs: { image: r.name } };
       // endAt: образец ведёт только первые шаги (композиция, тон, характер), мелкий штрих модель дорисовывает сама —
@@ -183,6 +184,7 @@ function wfGenerate(o) {
           model, ipadapter: ['ipa', 0], image: [s.tiled ? 'sl' + i : 'sp' + i, 0], clip_vision: ['cv', 0],
           weight: +(k * r.w).toFixed(3), weight_type: s.weightType || 'style transfer',
           combine_embeds: 'concat', start_at: 0, end_at: s.endAt ?? 1, embeds_scaling: 'V only', ...(s.tiled ? { sharpening: 0 } : {}),
+          ...(o.styleNegative ? { image_negative: ['sneg', 0] } : {}),
         },
       };
       model = ['ipadv' + i, 0];

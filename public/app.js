@@ -10,7 +10,7 @@ const FORMATS = [
   { ar: '3:2', name: 'Альбом' },
   { ar: '16:9', name: 'Широкий' },
 ];
-const DEFAULT_PARAMS = { quality: 'normal', style: 'graphite', ar: '1:1', count: 4, stylize: 250, chaos: 0, weird: 0, iw: 1, no: '', sw: 1, guards: [] };
+const DEFAULT_PARAMS = { quality: 'normal', style: 'graphite', ar: '1:1', count: 4, stylize: 250, chaos: 0, weird: 0, iw: 1, no: '', sw: 1, guards: [], taste: false };
 const EXAMPLES = [
   'старый маяк в шторм, одинокая фигура на берегу',
   'портрет пожилой балерины в гримёрке',
@@ -177,6 +177,7 @@ function syncControls() {
   $$('#countSeg button').forEach((b) => b.classList.toggle('on', +b.dataset.v === +p.count));
   $$('#qualitySeg button').forEach((b) => b.classList.toggle('on', b.dataset.v === p.quality));
   $$('#guardSeg button').forEach((b) => b.classList.toggle('on', (p.guards || []).includes(b.dataset.g)));
+  renderTaste();
   if (document.activeElement !== $('#countInput')) $('#countInput').value = p.count;
   $$('#editCountSeg button').forEach((b) => b.classList.toggle('on', +b.dataset.v === +state.editCount));
   for (const k of ['stylize', 'chaos', 'weird', 'iw', 'sw']) {
@@ -239,6 +240,16 @@ function renderSources() {
   if (inp) inp.onchange = (e) => { const f = e.target.files[0]; if (f) addImage(f); };
 }
 
+// ---------------- «Мой вкус»: ♡ и 👎 → Arto тянет к понравившемуся ----------------
+function renderTaste() {
+  const p = state.params;
+  let liked = 0;
+  for (const j of state.jobs) if ((j.params?.style || 'raw') === p.style && !j.params?.myLora) for (const im of j.images) if (im.file && im.liked) liked++;
+  $('#tasteBtn').classList.toggle('on', !!p.taste);
+  $('#tasteN').textContent = liked ? `(${liked})` : '';
+  $('#tasteBtn').hidden = !!$('#myLora')?.value;
+}
+
 // ---------------- «моя манера» (обученная LoRA) ----------------
 async function loadMyLoras() {
   try { state.myLoras = await api('/api/loras'); } catch { state.myLoras = []; }
@@ -258,11 +269,13 @@ function renderManner() {
   const on = !!$('#myLora').value;
   const w = +$('#myLoraPower').value;
   $('#myLoraPowerWrap').hidden = !on;
+  $('#mlShare').hidden = !on;
   $('#vMl').textContent = w < 0.65 ? 'слегка' : w <= 0.9 ? 'как в образцах' : 'сильнее';
   $('#mlNote').hidden = !on;
   $('#stRefs').hidden = on;
   $('.st-mine').hidden = on;
   $('#style').disabled = on;
+  if ($('#tasteBtn')) $('#tasteBtn').hidden = on;
   $('#style').closest('.pick').classList.toggle('ml-on', on);
   try { localStorage.setItem('arto.manner', JSON.stringify({ id: $('#myLora').value, w })); } catch {}
 }
@@ -282,6 +295,30 @@ function bindTrain() {
     renderManner();
   };
   $('#myLoraPower').oninput = renderManner;
+  // обмен стилями: один файл .artostyle
+  $('#mlShare').onclick = () => {
+    const id = $('#myLora').value;
+    if (!id) return;
+    const a = document.createElement('a');
+    a.href = '/api/loras/' + id + '/export';
+    a.click();
+    toast('Сохраняю стиль в файл — его можно отправить другу. Он добавит его кнопкой «Добавить стиль из файла»');
+  };
+  $('#mlImport').onchange = async (e) => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    toast('Добавляю стиль «' + f.name.replace(/\.artostyle$/i, '') + '»…');
+    try {
+      const r = await fetch('/api/loras/import', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Не получилось');
+      await loadMyLoras();
+      $('#myLora').value = j.id;
+      $('#myLora').dispatchEvent(new Event('change'));
+      toast('Стиль «' + j.name + '» добавлен — он уже выбран, можно рисовать');
+    } catch (err) { toast(err.message, true); }
+  };
   $('#trainOpen').onclick = async () => {
     files = [];
     $('#trCount').textContent = '';
@@ -547,10 +584,16 @@ async function action(act, job, index) {
         $('#prompt').focus();
         return;
       case 'like':
-        await api(`/api/jobs/${job.id}/${index}/like`, {});
-        job.images[index].liked = !job.images[index].liked;
+      case 'dislike': {
+        await api(`/api/jobs/${job.id}/${index}/${act}`, {});
+        const im = job.images[index];
+        if (act === 'like') { im.liked = !im.liked; if (im.liked) im.disliked = false; }
+        else { im.disliked = !im.disliked; if (im.disliked) im.liked = false; }
         refreshAll();
+        renderTaste();
+        if (im.disliked) toast('Понял — такое не нравится. С «Моим вкусом» Arto будет уводить от похожего');
         return;
+      }
       case 'delete':
         if (!confirm('Удалить эту картинку?')) return;
         await api(`/api/jobs/${job.id}/${index}/delete`, {});
@@ -592,7 +635,7 @@ function addJob(job) {
 
 // ---------------- лента ----------------
 const rendered = new Map();
-const jobSig = (j) => j.status + '|' + j.images.map((i) => (i.file || '') + (i.error ? 'E' : '') + (i.liked ? 'L' : '')).join(',');
+const jobSig = (j) => j.status + '|' + j.images.map((i) => (i.file || '') + (i.error ? 'E' : '') + (i.liked ? 'L' : '') + (i.disliked ? 'D' : '')).join(',');
 
 function renderFeed() {
   const feed = $('#feed');
@@ -638,6 +681,7 @@ function chipsHTML(job) {
   if (job.usedReference) chips.push('от картинки');
   if (job.control) chips.push(job.control.mode === 'photo' ? 'по контуру фото' : 'по наброску');
   if (p.myLora) { const ml = (state.myLoras || []).find((x) => x.id === p.myLora.id); chips.push(job.mannerName || ml ? 'мой стиль: ' + (job.mannerName || ml.name) : 'мой стиль'); }
+  if (job.tasteFiles?.length) chips.push('мой вкус');
   if (p.series) chips.unshift(`серия ${p.series.n}/${p.series.of}`);
   return chips.map((c) => `<span class="chip">${esc(c)}</span>`).join('');
 }
@@ -646,14 +690,15 @@ function cellHTML(job, img, i) {
   const fixed = job.type === 'imagine' || job.type === 'variation' || job.type === 'outpaint';
   const ratio = fixed ? `style="aspect-ratio:${job.params.width}/${job.params.height}"` : '';
   if (img.file) {
-    return `<div class="cell" data-i="${i}" ${ratio}>
+    return `<div class="cell${img.disliked ? ' disliked' : ''}" data-i="${i}" ${ratio}>
       <img src="/images/${esc(img.file)}" loading="lazy" onload="this.classList.add('loaded')" alt="">
       ${img.liked ? '<span class="liked">♥</span>' : ''}
       <div class="quick">
         ${state.edition.canEdit ? '<button data-q="edit">Изменить</button>' : ''}
         <button data-q="studio">Редактор</button>
         ${job.type !== 'upscale' ? '<button data-q="vary-subtle">Похожие</button><button data-q="upscale">×2</button>' : ''}
-        <button data-q="like" title="Любимое">${img.liked ? '♥' : '♡'}</button>
+        <button data-q="like" title="Нравится">${img.liked ? '♥' : '♡'}</button>
+        <button data-q="dislike" title="Не то">${img.disliked ? '👎' : '<span class="dim">👎</span>'}</button>
       </div>
     </div>`;
   }
@@ -787,6 +832,7 @@ function renderLightbox() {
   $('#lbDownload').download = `atelier_${job.prompt.slice(0, 40).replace(/[^\p{L}\p{N}]+/gu, '_')}_${img.seed}.${img.file.split('.').pop()}`;
   $('#lbLike').textContent = img.liked ? '♥' : '♡';
   $('#lbLike').title = img.liked ? 'Убрать из любимых' : 'В любимые';
+  $('#lbDislike').classList.toggle('on', !!img.disliked);
   $('#lbUpscale').hidden = job.type === 'upscale';
   $('#lbUpFix').hidden = !state.edition.canEdit;
   $('#lbPrev').style.visibility = state.lb.i > 0 ? '' : 'hidden';
@@ -1185,6 +1231,12 @@ function bindEvents() {
     if (!st) return;
     state.styleRefs = st.files.map((f, i) => ({ url: '/images/' + f, file: f, w: st.weights?.[i] ?? 1 }));
     syncControls();
+  };
+  $('#tasteBtn').onclick = () => {
+    state.params.taste = !state.params.taste;
+    saveParams();
+    syncControls();
+    if (state.params.taste && !$('#tasteN').textContent) toast('Отмечайте ♡ то, что нравится, и 👎 то, что не то, — Arto начнёт учитывать ваш вкус в этой технике');
   };
   $('#guardSeg').onclick = (e) => {
     const b = e.target.closest('[data-g]');

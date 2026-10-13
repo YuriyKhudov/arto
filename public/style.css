@@ -632,4 +632,13 @@ body.touring .tour-block, body.touring .tour-spot, body.touring .tour-card { dis
 
 .ml-note { margin: 4px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line); color: var(--accent-2); font-size: 13px; line-height: 1.5; }
 .pick.ml-on select { opacity: .45; }
-.pick.ml-on::after { content: 'задаёт ваша манера'; font-size: 12px; color: var(--accent); }
+.pick.ml-on::after { content: 'задаёт ваш стиль'; font-size: 12px; color: var(--accent); }
+
+/* ===== мой вкус ===== */
+.taste-btn { border: 1px solid var(--line); background: var(--bg-2); color: var(--muted); border-radius: 10px; padding: 7px 12px; font-size: 13px; cursor: pointer; }
+.taste-btn:hover { color: var(--text); }
+.taste-btn.on { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+.taste-btn small { opacity: .75; }
+.cell.disliked img { opacity: .45; filter: grayscale(.6); }
+.quick .dim { opacity: .5; }
+#lbDislike.on { background: var(--bg-3); border-color: var(--danger); }

@@ -92,6 +92,8 @@
             <small class="scale"><em>меньше стиля</em><b id="vMl"></b><em>больше стиля</em></small>
           </label>
           <button class="btn" id="trainOpen">Обучить на моих картинах…</button>
+          <button class="btn" id="mlShare" hidden title="Сохранить выбранный стиль в файл и отправить другу">Поделиться стилем</button>
+          <label class="btn" title="Добавить стиль, которым с вами поделились (файл .artostyle)"><input type="file" id="mlImport" accept=".artostyle" hidden>Добавить стиль из файла…</label>
         </div>
         <p class="ml-note" id="mlNote" hidden>Выбран ваш стиль — он сам задаёт технику, свет и фактуру. Техника и картинки-образцы сейчас не нужны: просто опишите, что нарисовать.</p>
         <div id="stRefs">
@@ -138,6 +140,7 @@
           <span title="Arto будет внимательнее к типичным ошибкам: лишним пальцам, пятой лапе, кривому горизонту…">Следить за</span>
           <div class="seg guards" id="guardSeg"></div>
         </div>
+        <button class="taste-btn" id="tasteBtn" title="Arto будет тянуть картинки к тем, что вам понравились (♡), и уводить от тех, что «не то» (👎) — в той же технике и на похожие сюжеты">♥ Мой вкус <small id="tasteN"></small></button>
         <button class="more-btn" id="moreBtn">Ещё настройки <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
       </div>
 
@@ -267,6 +270,7 @@
       <div class="btn-row">
         <a class="btn primary" id="lbDownload" download>Скачать</a>
         <button class="btn" data-act="like" id="lbLike">♡</button>
+        <button class="btn" data-act="dislike" id="lbDislike" title="Не то — Arto будет уводить от такого">👎</button>
         <button class="btn danger" data-act="delete" title="Удалить">Удалить</button>
       </div>
       <details class="lb-details"><summary>Что именно получил художник-ИИ</summary><p id="lbFinal"></p><p class="muted" id="lbNeg"></p></details>

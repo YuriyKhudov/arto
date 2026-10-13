@@ -80,7 +80,8 @@ API редактора (`ed`): `img` (canvas картинки), `mask` (canvas �
 
 Готовые возможности (для ориентира): «Нарисовать по наброску / по контуру фото» (ControlNet, `job.control`),
 «Раскрыть кадр» (`createOutpaint`), серии (несколько строк промпта = общий seed, `params.series`),
-доски настроения (`/api/boards`), «Мой стиль» — обучение LoRA на картинах художника (`createTrain`, `/api/train`, `/api/loras`).
+доски настроения (`/api/boards`), «Мой стиль» — обучение LoRA на картинах художника (`createTrain`, `/api/train`, `/api/loras`),
+обмен стилями (`.artostyle`: `exportStyle` / `importStyle`), «Мой вкус» — ♡/👎 → мягкие образцы стиля (`tasteRefs`, `withTaste`).
 
 ## Подсказки «Как пользоваться»
 
