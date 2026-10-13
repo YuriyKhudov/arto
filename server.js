@@ -240,7 +240,9 @@ async function createImagine({ prompt, params, ref, variation, styles = [], cont
     };
   }
   job.styleWeights = styles.slice(0, 3).map((st) => st.w);
-  const sw = Number.isFinite(+p.sw) ? Math.max(0, Math.min(2, +p.sw)) : 1;
+  const sw0 = Number.isFinite(+p.sw) ? Math.max(0, Math.min(2, +p.sw)) : 1;
+  // ползунок 0…2 → реальная сила: выше ~1.2 стиль с картинок начинает тащить содержимое образца и «перемазывать» технику (проверено)
+  const sw = sw0 * (edition.styleRef?.weightScale ?? 1);
 
   let refName = null;
   let styleNames = null;

@@ -171,6 +171,7 @@ const LEVELS = {
 
 function syncControls() {
   const p = state.params;
+  if (state.styles.length && !state.styles.some((st) => st.id === p.style)) p.style = p.style === 'gouache' ? 'oil' : 'graphite'; // техника убрана
   $('#style').value = p.style;
   $$('#formatSeg button').forEach((b) => b.classList.toggle('on', b.dataset.ar === p.ar));
   $$('#countSeg button').forEach((b) => b.classList.toggle('on', +b.dataset.v === +p.count));

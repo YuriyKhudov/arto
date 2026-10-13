@@ -8,71 +8,78 @@
 //   --style id    пресет стиля (graphite, charcoal, ink, ...)
 //   --iw 0..2     вес референса (насколько держаться исходной картинки)
 
+// Техника — честная: только материал, инструмент и основа (бумага, холст).
+// avoid — чего в этой технике быть не может (карандаш без краски и мазков, тушь без серых растяжек…).
+// kind: drawing — графика (без «красивостей» про свет и цвет), painting — живопись. mono — без цвета.
 const STYLES = [
   { id: 'raw', name: 'Raw', hint: 'Без стиля — только ваш промпт', core: '' },
-  { id: 'graphite', name: 'Графит', hint: 'Карандашный штудийный рисунок',
-    core: 'graphite pencil sketch, expressive hatching and cross-hatching, visible construction lines, soft smudged tonal shading, on textured off-white drawing paper' },
-  { id: 'charcoal', name: 'Уголь', hint: 'Мощный тональный рисунок углём',
-    core: 'charcoal drawing, bold gestural strokes, deep velvety blacks, smudged edges and eraser highlights, raw energetic mark-making, on grainy paper' },
-  { id: 'ink', name: 'Тушь и перо', hint: 'Линия, штрих, пятно туши',
-    core: 'pen and ink drawing, confident calligraphic linework, ink wash and splatter, varied line weight, dynamic hatching, sumi ink on cream paper' },
-  { id: 'sanguine', name: 'Сангина', hint: 'Красный мел на тонированной бумаге',
-    core: 'sanguine red chalk drawing on toned paper, white chalk highlights, old master study, delicate contour lines, Renaissance sketchbook page' },
-  { id: 'watercolor', name: 'Акварель', hint: 'Лёгкий акварельный эскиз',
-    core: 'loose watercolor sketch, wet-on-wet blooms, transparent washes, pencil underdrawing showing through, granulating pigments, white of the paper left untouched' },
-  { id: 'gouache', name: 'Гуашь', hint: 'Плотный этюд гуашью',
-    core: 'gouache study, flat opaque color shapes, painterly brushwork, limited palette, simplified forms, matte finish, visible paper edges' },
-  { id: 'oil', name: 'Масляный этюд', hint: 'Alla prima, пастозный мазок',
-    core: 'alla prima oil sketch, thick impasto brushstrokes, palette knife marks, loose unfinished edges, plein air study, rich broken color' },
-  { id: 'pastel', name: 'Пастель', hint: 'Сухая пастель, мягкие переходы',
-    core: 'soft pastel drawing, chalky textured strokes, layered vibrant pigment, Degas-like mark-making, on colored pastel paper' },
-  { id: 'concept', name: 'Концепт-арт', hint: 'Скетч концепт-художника',
-    core: 'concept art sketch, loose painterly rendering, strong silhouette, atmospheric perspective, designer sketchbook, rough thumbnails energy' },
-  { id: 'marker', name: 'Маркеры', hint: 'Дизайнерский маркерный скетч',
-    core: 'alcohol marker rendering, fineliner contours, bold grey marker shading, quick industrial design sketch, crisp highlights with white gel pen' },
-  { id: 'notan', name: 'Нотан / тон', hint: 'Тоновое пятно, 2–3 значения',
-    core: 'notan value study, three-value composition, bold black white and mid grey shapes, abstracted masses, strong design of light and shadow' },
-  { id: 'thumbnail', name: 'Миниатюры', hint: 'Лист композиционных набросков',
-    core: 'sketchbook page of small composition thumbnails, quick tonal value sketches with framing boxes, artist notes, exploring layout variations' },
-  { id: 'linocut', name: 'Линогравюра', hint: 'Графика печати, резкий контраст',
-    core: 'linocut print, carved gouge marks, high contrast black and white, bold graphic shapes, hand-pulled printmaking texture' },
-  { id: 'mixed', name: 'Смешанная техника', hint: 'Коллаж, слои, фактура',
-    core: 'mixed media sketch, layered collage, graphite and acrylic, torn paper textures, scribbles and drips, experimental art journal page' },
-  { id: 'realism', name: 'Реализм', hint: 'Реалистичная живопись, живая кожа и свет',
+  { id: 'graphite', name: 'Графит', hint: 'Карандашный штудийный рисунок', kind: 'drawing', mono: true,
+    core: 'graphite pencil drawing, precise pencil lines, fine hatching and cross-hatching, graphite shading built from pencil strokes, on white drawing paper',
+    avoid: 'paint, painting, brush strokes, paint daubs, blotches, watercolor, gouache, oil paint, ink wash, color, colorful, smudged blobs, airbrush' },
+  { id: 'charcoal', name: 'Уголь', hint: 'Мощный тональный рисунок углём', kind: 'drawing', mono: true,
+    core: 'charcoal drawing, bold charcoal strokes, rich charcoal blacks, smudged charcoal tones, eraser highlights, on textured drawing paper',
+    avoid: 'paint, painting, brush strokes, paint daubs, watercolor, gouache, oil paint, color, colorful, digital painting, smooth airbrush gradients' },
+  { id: 'ink', name: 'Тушь и перо', hint: 'Линия, штрих, пятно туши', kind: 'drawing', mono: true,
+    core: 'pen and black ink drawing, confident ink linework, varied line weight, ink hatching, solid black ink areas, on white paper',
+    avoid: 'paint, painting, color, colorful, watercolor, gouache, oil paint, pencil shading, soft grey gradients, airbrush, blurry' },
+  { id: 'sanguine', name: 'Сангина', hint: 'Красный мел на тонированной бумаге', w: 1.4, kind: 'drawing',
+    core: 'monochrome sanguine drawing in red-brown chalk only, red chalk hatching, white chalk highlights, on warm toned paper, old master study',
+    avoid: 'paint, painting, brush strokes, oil paint, watercolor, gouache, full color, colorful, blue sky, green grass, digital painting' },
+  { id: 'watercolor', name: 'Акварель', hint: 'Лёгкий акварельный эскиз', kind: 'painting',
+    core: 'watercolor painting, transparent watercolor washes, wet-on-wet blooms, soft bleeding edges, light pencil underdrawing, white of the paper left untouched, on cold press watercolor paper',
+    avoid: 'oil paint, impasto, thick opaque paint, gouache, acrylic, digital painting, heavy black outlines' },
+  { id: 'oil', name: 'Масляный этюд', hint: 'Alla prima, пастозный мазок', w: 1.6, kind: 'painting',
+    core: 'thick impasto oil painting, heavy visible brushstrokes, palette knife marks, alla prima, oil paint texture on canvas',
+    avoid: 'watercolor, pencil drawing, line art, flat colors, smooth digital painting, airbrush, fine detail, photorealistic' },
+  { id: 'pastel', name: 'Пастель', hint: 'Сухая пастель, мягкие переходы', w: 1.6, kind: 'painting',
+    core: 'soft pastel drawing, chalky grainy pastel strokes, pastel sticks marks, paper texture showing through, on colored pastel paper',
+    avoid: 'oil paint, glossy paint, watercolor washes, ink lines, smooth digital painting, airbrush, photorealistic' },
+  { id: 'concept', name: 'Концепт-арт', hint: 'Скетч концепт-художника', kind: 'painting',
+    core: 'concept art sketch, loose digital painting, strong silhouette, clear value structure, designer sketchbook',
+    avoid: '' },
+  { id: 'marker', name: 'Маркеры', hint: 'Дизайнерский маркерный скетч', w: 1.45, kind: 'drawing',
+    core: 'quick marker sketch, copic alcohol markers, streaky visible marker strokes, black fineliner outlines, white paper left blank around the drawing, limited grey tones with one accent color',
+    avoid: 'oil paint, watercolor, painterly, digital painting, full background painting, sky gradient, photorealistic, soft shading' },
+  { id: 'notan', name: 'Нотан / тон', hint: 'Тоновое пятно, 2–3 значения', w: 1.45, kind: 'drawing', mono: true,
+    core: 'notan, flat graphic shapes in pure black white and one mid grey, three flat tones only, no gradients, bold abstracted masses',
+    avoid: 'color, colorful, gradients, shading, hatching, texture, fine details, realistic rendering, brush strokes' },
+  { id: 'thumbnail', name: 'Миниатюры', hint: 'Лист композиционных набросков', kind: 'drawing', mono: true,
+    core: 'sketchbook page of small composition thumbnails, quick grey tonal sketches inside framing boxes, artist notes, layout variations',
+    avoid: 'color, colorful, single finished painting, detailed rendering' },
+  { id: 'linocut', name: 'Линогравюра', hint: 'Графика печати, резкий контраст', kind: 'drawing', mono: true,
+    core: 'linocut print, carved gouge marks, high contrast black and white, bold graphic shapes, printmaking texture',
+    avoid: 'color, grey gradients, soft shading, pencil, watercolor, paint, brush strokes' },
+  { id: 'mixed', name: 'Смешанная техника', hint: 'Коллаж, слои, фактура', kind: 'painting',
+    core: 'mixed media artwork, layered collage, graphite and acrylic, torn paper textures, scribbles and drips, art journal page',
+    avoid: '' },
+  { id: 'realism', name: 'Реализм', hint: 'Реалистичная живопись, живая кожа и свет', kind: 'painting', drawn: false,
     core: 'realistic oil painting, lifelike natural skin tones, subtle realistic lighting, accurate anatomy and proportions, fine detailed rendering, academic realism, depth of field',
-    drawn: false,
     negative: 'pencil sketch, drawing, line art, lineart, graphite, charcoal, cartoon, anime, comic, illustration, flat colors, sketchy lines, monochrome, watermark, signature, text, logo, lowres, blurry, deformed, bad anatomy, extra fingers' },
 ];
 
-// stylize — «эстетический слой» в духе Midjourney (накопительно).
-// Признаки фирменного вида MJ: гармоничная ограниченная палитра, кинематографичный свет,
-// атмосферная глубина, выразительная композиция с ясным центром внимания,
-// проработанный фокус и свободные, «растворяющиеся» края, богатая фактура.
-// Общий слой — нейтральный для любой картины (без слов про рисунок, иначе Raw/реализм уходят в карандаш)
-const STYLIZE_TIERS = [
-  [25, 'artful composition with a clear focal point'],
-  [75, 'harmonious color palette, atmospheric depth, beautiful soft light'],
-  [100, 'rich detail, tactile textures'],
-  [200, 'expressive light and shadow, dramatic lighting'],
-  [350, 'evocative mood, poetic storytelling, fine art masterpiece'],
-  [550, 'breathtaking artistic vision, museum quality, sublime atmosphere'],
-  [800, 'highly stylized visionary interpretation, dreamlike grandeur'],
-];
-
-// Дополнительный слой только для рисовальных техник (графит, уголь, тушь…)
-const DRAWN_TIERS = [
-  [100, 'detailed focal area dissolving into loose expressive edges, elegant negative space'],
-  [200, 'masterful draftsmanship, strong value design'],
-];
+// stylize — «художественность» (накопительно). Только то, что не спорит с техникой:
+// живописи можно про свет и настроение, графике — только композиция и уверенная рука.
+const STYLIZE_TIERS = {
+  painting: [
+    [25, 'artful composition with a clear focal point'],
+    [350, 'expressive light and shadow'],
+    [600, 'bold artistic interpretation'],
+  ],
+  drawing: [
+    [25, 'artful composition with a clear focal point'],
+    [150, 'confident draftsmanship, strong value design'],
+    [350, 'expressive mark-making, elegant negative space'],
+  ],
+};
 
 // chaos: случайные модификаторы для каждого из вариантов
 const CHAOS_POOLS = [
   ['dramatic low angle', 'bird\'s eye view', 'tight close-up crop', 'wide panoramic composition', 'asymmetric off-center composition', 'strong diagonal composition', 'figure small in vast space', 'frontal symmetric composition'],
   ['backlit silhouette', 'harsh side light', 'soft diffused light', 'rim light', 'moody twilight', 'single candle light', 'overcast flat light', 'golden hour glow'],
   ['melancholic mood', 'restless energy', 'quiet contemplation', 'tension and suspense', 'dreamy calm', 'joyful movement', 'solemn monumentality'],
-  ['muted earth palette', 'monochrome sepia', 'cold blue greys', 'warm ochres and siennas', 'single accent of red', 'complementary orange and teal', 'desaturated greens'],
-  ['very loose and fast', 'meticulous and precise', 'fragmented unfinished edges', 'rhythmic repeating strokes', 'heavy texture'],
+  ['muted earth palette', 'cold blue greys', 'warm ochres and siennas', 'single accent of red', 'complementary orange and teal', 'desaturated greens'],
 ];
+const PALETTE_POOL = 3; // номер пула палитр — монохромным техникам не подходит
 
 const WEIRD_POOL = [
   'surreal dreamlike distortion', 'unexpected juxtaposition', 'impossible architecture', 'elongated mannerist proportions',
@@ -106,6 +113,9 @@ const GUARDS = [
     pos: '', neg: '(text:1.3), letters, words, writing, caption, signature, watermark, logo, numbers' },
 ];
 
+// убранные техники → ближайшая (старые работы и сохранённые настройки не ломаются)
+const RETIRED = { gouache: 'oil' };
+
 function mulberry32(a) {
   return function () {
     a |= 0; a = (a + 0x6d2b79f5) | 0;
@@ -119,16 +129,14 @@ function pick(rng, arr) { return arr[Math.floor(rng() * arr.length)]; }
 
 function buildPrompts({ subject, style = 'graphite', stylize = 100, chaos = 0, weird = 0, no = '', seed = 0, count = 4, guards = [] }) {
   const gs = GUARDS.filter((g) => (guards || []).includes(g.id));
-  const st = STYLES.find((s) => s.id === style) || STYLES[0];
+  const st = STYLES.find((s) => s.id === (RETIRED[style] || style)) || STYLES[0];
   // «Без стиля» — только текст художника: никаких своих добавок (красивостей, разнообразия, странности)
   if (st.id === 'raw') { stylize = 0; chaos = 0; weird = 0; }
   // Техника — в начало и с повышенным весом: иначе модели скатываются в фото
   const [medium, ...details] = st.core.split(', ');
-  const base = st.core ? [`(${medium}:1.3) of ${subject.trim()}`, details.join(', ')] : [subject.trim()];
-  const drawn = st.core && st.drawn !== false;
-  for (const [t, text] of STYLIZE_TIERS) if (stylize >= t) base.push(text);
-  if (drawn) for (const [t, text] of DRAWN_TIERS) if (stylize >= t) base.push(text);
-  if (drawn) base.push('(hand-drawn traditional artwork:1.2)');
+  const base = st.core ? [`(${medium}:${st.w || 1.3}) of ${subject.trim()}`, details.join(', ')] : [subject.trim()];
+  for (const [t, text] of STYLIZE_TIERS[st.kind] || []) if (stylize >= t) base.push(text);
+  if (st.core && st.drawn !== false) base.push('(hand-drawn traditional artwork:1.2)');
   for (const g of gs) if (g.pos) base.push(g.pos);
 
   const prompts = [];
@@ -136,7 +144,7 @@ function buildPrompts({ subject, style = 'graphite', stylize = 100, chaos = 0, w
     const rng = mulberry32(seed * 31 + i * 7919 + 1);
     const parts = [...base];
     const nChaos = Math.ceil((chaos / 100) * CHAOS_POOLS.length);
-    const pools = [...CHAOS_POOLS].sort(() => rng() - 0.5).slice(0, nChaos);
+    const pools = CHAOS_POOLS.filter((_, k) => !(st.mono && k === PALETTE_POOL)).sort(() => rng() - 0.5).slice(0, nChaos);
     for (const pool of pools) if (rng() < 0.35 + chaos / 150) parts.push(pick(rng, pool));
     const nWeird = weird > 0 ? Math.min(4, Math.ceil(weird / 750)) : 0;
     const used = new Set();
@@ -147,7 +155,7 @@ function buildPrompts({ subject, style = 'graphite', stylize = 100, chaos = 0, w
     prompts.push(parts.filter(Boolean).join(', '));
   }
 
-  const baseNeg = style === 'raw' ? '' : st.negative || DEFAULT_NEGATIVE;
+  const baseNeg = style === 'raw' ? '' : [st.negative || DEFAULT_NEGATIVE, st.avoid].filter(Boolean).join(', ');
   const negative = [baseNeg, ...gs.map((g) => g.neg), no].filter((x) => x && x.trim()).join(', ');
   return { prompts, negative };
 }
