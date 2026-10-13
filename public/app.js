@@ -426,14 +426,10 @@ async function go() {
   const text = $('#prompt').value.trim();
   if (!text) { $('#prompt').focus(); return; }
   if (state.engine.status !== 'ready') return toast(state.engine.message, true);
-  // просят реализм, а выбрана рисовальная техника — предложить «Реализм»
-  if (state.mode === 'draw' && /реалист|фотореал|как фото|realistic|photoreal/i.test(text)
+  // просят реализм, а выбрана рисовальная техника — только подсказка, рисуем с настройками художника
+  if (state.mode === 'draw' && !$('#myLora').value && /реалист|фотореал|как фото|realistic|photoreal/i.test(text)
       && !['realism', 'raw', 'oil'].includes(state.params.style)) {
-    if (confirm(`В запросе есть «реалистичный», а выбрана техника «${styleName(state.params.style)}» — она превратит всё в рисунок.\n\nПереключить на «Реализм»?`)) {
-      state.params.style = 'realism';
-      saveParams();
-      syncControls();
-    }
+    toast(`Рисую в технике «${styleName(state.params.style)}». Нужен реализм — выберите технику «Реализм».`);
   }
   const btn = $('#goBtn');
   btn.disabled = true;
@@ -444,7 +440,7 @@ async function go() {
       job = await api('/api/edit', { instruction: text, count: state.editCount, quality: state.editQuality, sources: state.sources.map((s) => s.ref || s.data) });
     } else {
       const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
-      if (lines.length > 1 && confirm(`Сделать серию из ${lines.length} сюжетов в одном стиле?\n\nУ всех будут одинаковые техника, формат, стиль и «зерно» — как цикл работ.`)) {
+      if (lines.length > 1) {
         const seriesSeed = Math.floor(Math.random() * 2 ** 31);
         const seriesId = Date.now().toString(36);
         for (let i = lines.length - 1; i >= 0; i--) {
