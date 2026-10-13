@@ -20,6 +20,7 @@ const { Comfy, wfGenerate, wfUpscale, wfEdit, wfOutpaint, wfOutpaintUnion, wfTra
 const { toEnglish, preload: preloadTranslator } = require('./translate');
 // библиотека картинок нужна только для сохранения фактуры — если её нет, остальное работает
 const texture = () => require('./texture');
+const facefix = () => require('./facefix');
 
 const PORT = process.env.PORT || 7777;
 const ROOT = __dirname;
@@ -334,11 +335,13 @@ function createUpscale(src, index, mode = 'simple') {
     if (mode === 'fix') {
       const name = await comfy.upload(buf, `${job.id}_fix.${sniffExt(buf)}`);
       const fixed = await runEdit({ names: [name], firstBuf: buf, instruction: FIX_INSTRUCTION, seed: s.seed || 1, prog });
-      buf = await keepTexture(buf, fixed, { retexture: true, prompt: s.finalPrompt || src.prompt, negative: src.negative, seed: s.seed || 1 });
+      buf = await keepTexture(buf, fixed, { retexture: true, prompt: s.finalPrompt || src.prompt, negative: src.negative, seed: s.seed || 1, maxChange: 0.35 });
     }
 
     const name = await comfy.upload(buf, `${job.id}_in.${sniffExt(buf)}`);
     const up = await comfy.run(wfUpscale({ image: name, model: upModel }), { onProgress: mode === 'simple' ? prog : undefined });
+    // лица — отдельно и крупно: так исправляются кривые глаза, асимметрия, «поплывшие» черты
+    if (mode === 'fix') return fixFaces(up, { src, s, prog, findOn: buf });
     if (mode !== 'art') return up;
 
     // художественное: перерисовать увеличенную картинку моделью-художником с малой силой (композиция сохраняется)
@@ -467,12 +470,49 @@ function createOutpaint(src, index, { mode = 'wide', amount = 0.4, ar = null } =
   });
 }
 
+// ---------- лица: найти, перерисовать крупно той же моделью-художником, вклеить с мягким краем ----------
+// (как ADetailer / FaceDetailer: на маленьком лице модели не хватает пикселей, поэтому глаза и черты «плывут»)
+async function fixFaces(buf, { src, s, prog, findOn = null }) {
+  const sharp = require('sharp');
+  let faces;
+  const { width: W, height: H } = await sharp(buf).metadata();
+  try {
+    await facefix().ensure();
+    // искать лучше на исходной картинке (до увеличения лица чётче), координаты — пересчитать
+    const k = findOn ? W / (await sharp(findOn).metadata()).width : 1;
+    faces = (await facefix().detect(findOn || buf)).map((f) => ({ x: f.x * k, y: f.y * k, w: f.w * k, h: f.h * k, score: f.score }));
+  } catch (e) { logError('Поиск лиц', e); return buf; }
+  // только явные, прорисованные лица: размытое лицо в свободной манере (уверенность ниже) — замысел художника, не трогаем
+  faces = faces.filter((f) => f.score >= 0.8 && Math.max(f.w, f.h) >= Math.min(W, H) * 0.03).slice(0, 4);
+  if (!faces.length) return buf;
+  const g = edition.generate;
+  const ml = src.params?.myLora && myLoras.find((x) => x.id === src.params.myLora.id);
+  const loras = ml ? [{ name: await model('loras', ml.file), strength: Math.max(0, Math.min(1.5, +src.params.myLora.w || 0.8)) }] : [];
+  const ckpt = await model('checkpoints', g.ckpt);
+  for (let i = 0; i < faces.length; i++) {
+    const box = facefix().cropBox(faces[i], W, H);
+    const crop = await sharp(buf).extract({ left: box.x, top: box.y, width: box.side, height: box.side }).resize(g.base, g.base).png().toBuffer();
+    const name = await comfy.upload(crop, `face_${Date.now()}_${i}.png`);
+    const out = await comfy.run(wfGenerate({
+      ckpt, loras,
+      prompt: (s.finalPrompt || src.prompt || '') + ', symmetrical face, well-aligned eyes, natural facial proportions, same technique',
+      negative: [src.negative, 'asymmetrical face, deformed face, crooked eyes, uneven eyes, cross-eyed, distorted features, malformed nose, blurry face'].filter(Boolean).join(', '),
+      width: g.base, height: g.base, seed: (s.seed || 1) + i, steps: Math.max(10, g.steps + 4), cfg: g.cfg, sampler: g.sampler, scheduler: g.scheduler,
+      refImage: name, denoise: 0.45,
+    }), { onProgress: prog });
+    buf = await facefix().paste(buf, out, box);
+  }
+  return buf;
+}
+
 // ---------- сохранение фактуры ----------
 // ИИ-редактор перерисовывает всю картинку и сглаживает мазок. Берём из правки только изменённые места;
 // при retexture — ещё и «перемазываем» их моделью-художником в манере оригинала (оригинал = образец стиля).
-async function keepTexture(orig, edited, { retexture = false, prompt = '', negative = '', seed = 1, prog } = {}) {
+async function keepTexture(orig, edited, { retexture = false, prompt = '', negative = '', seed = 1, prog, maxChange = null } = {}) {
   let r;
   try { r = await texture().preserveTexture(orig, edited); } catch (e) { logError('Сохранение фактуры', e); return edited; }
+  // правка, которая не должна менять стиль (исправление анатомии), перерисовала почти всё — отбрасываем её
+  if (maxChange != null && r.changed > maxChange) return orig;
   if (r.changed > 0.6) return edited;          // изменилась почти вся картинка (новый стиль, ночь…) — так и задумано
   if (!retexture || r.changed < 0.002) return r.buf;
   const g = edition.generate;

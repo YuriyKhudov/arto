@@ -125,6 +125,8 @@ if ($Edition -eq "pro") {
 $null = Need "clip_vision" "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors" "$HF/h94/IP-Adapter/resolve/main/models/image_encoder/model.safetensors" "зрение для стиля с картинок (2,5 ГБ)"
 
 # узел IP-Adapter для ComfyUI (стиль с картинок)
+# поиск лиц для «Исправить и увеличить» (маленькая модель, работает внутри Arto)
+Get-File "$HF/deepghs/real_face_detection/resolve/main/face_detect_v0_s_yv11/model.onnx" "$Root\models\face\face_detect_v0_s_yv11.onnx" "поиск лиц (38 МБ)"
 $ipaNode = "$Comfy\ComfyUI\custom_nodes\ComfyUI_IPAdapter_plus"
 if (-not (Test-Path $ipaNode)) {
   Get-File "https://codeload.github.com/cubiq/ComfyUI_IPAdapter_plus/zip/refs/heads/main" "$Root\engine\downloads\ipadapter.zip" "модуль стиля для ComfyUI"
