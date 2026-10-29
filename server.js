@@ -40,6 +40,7 @@ const mergeCfg = (a, b) => {
 const config = mergeCfg(readCfg(path.join(ROOT, 'atelier.config.json')), readCfg(path.join(DATA, 'local.json')));
 const updater = require('./update');
 const edition = { id: config.edition, ...config.editions[config.edition] };
+if (process.env.ARTO_COMFY_URL) config.comfy.url = process.env.ARTO_COMFY_URL; // только для проверок разработчика
 const comfy = new Comfy(config.comfy);
 comfy.ensureRunning();
 preloadTranslator();
@@ -859,6 +860,14 @@ const server = http.createServer(async (req, res) => {
       if (r.updated) restartSelf();
       return;
     }
+    // окно Arto сообщает «я здесь» и «меня закрыли» — когда окон не осталось, выключаем всё
+    if (p === '/api/alive' && req.method === 'POST') { windows.set(String((await readBody(req)).id || '?'), Date.now()); windowSeen = true; return send(res, 200, { ok: true }); }
+    if (p === '/api/bye' && req.method === 'POST') {
+      const id = (await readRaw(req, 1024)).toString().trim();
+      windows.delete(id);
+      setTimeout(checkWindows, BYE_GRACE);
+      return send(res, 200, { ok: true });
+    }
     if (p === '/api/engine') return send(res, 200, { status: comfy.status, message: comfy.message, queue: active.size });
     if (p === '/api/tools' && req.method === 'GET') {
       // Подключаемые инструменты редактора: каждый файл в public/tools/ — отдельный инструмент
@@ -1145,6 +1154,37 @@ function restartSelf() {
   }, 500);
 }
 
+// ---------- закрыли окно Arto — выключаем всё: рисование, двигатель (ComfyUI), сервер ----------
+// Обновление страницы (F5) — тоже «закрытие», поэтому ждём BYE_GRACE: если окно вернулось, ничего не делаем.
+// Свёрнутое окно браузер «усыпляет» (сигнал раз в минуту), поэтому по тишине выключаем только через WINDOW_TIMEOUT.
+const windows = new Map(); // id окна → когда было на связи
+const BYE_GRACE = 10000;
+const WINDOW_TIMEOUT = 3 * 60000;
+let windowSeen = false;
+function checkWindows() {
+  if (process.env.ARTO_KEEP || stopping) return;
+  const now = Date.now();
+  for (const [id, t] of windows) if (now - t > WINDOW_TIMEOUT) windows.delete(id);
+  // окон не осталось (а хотя бы одно было — иначе это запуск без окна) → выключаем
+  if (!windows.size && windowSeen) shutdownAll();
+}
+setInterval(checkWindows, 30000).unref();
+let stopping = false;
+
+function shutdownAll() {
+  if (stopping) return;
+  stopping = true;
+  restarting = true; // двигатель гасим сами, обработчик 'exit' не нужен
+  setTimeout(async () => {
+    console.log('Выключаю Arto…');
+    for (const job of active.values()) job.cancelled = true;
+    if (running) await comfy.interrupt();
+    server.close();
+    comfy.shutdown();
+    process.exit(0);
+  }, 300);
+}
+
 server.on('error', (e) => {
   if (e.code === 'EADDRINUSE') { console.log('Arto уже запущен — открываю окно.'); process.exit(0); }
   throw e;
@@ -1153,6 +1193,6 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`\n  Arto ${edition.title}:  http://localhost:${PORT}\n  Работы сохраняются в: ${IMAGES}\n`);
 });
 
-for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { comfy.stop(); process.exit(0); });
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => { restarting = true; comfy.shutdown(); process.exit(0); });
 process.on('exit', () => { if (!restarting) comfy.stop(); });
 let restarting = false;

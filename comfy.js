@@ -37,6 +37,7 @@ class Comfy {
     });
     this.proc.on('exit', (code) => {
       this.proc = null;
+      if (this.stopping) return;
       if (this.status !== 'ready') this.setError(`Двигатель остановился (код ${code}). Подробности: data/engine.log`);
       else { this.status = 'starting'; this.message = 'Двигатель перезапускается…'; this.ensureRunning(); }
     });
@@ -72,6 +73,30 @@ class Comfy {
   setError(m) { this.status = 'error'; this.message = m; }
 
   stop() { if (this.proc) this.proc.kill(); }
+
+  // Полное выключение: гасим двигатель, даже если он остался от прошлого запуска Arto
+  // (тогда this.proc пустой, а ComfyUI всё равно держит порт и видеопамять).
+  shutdown() {
+    this.stopping = true;
+    const { spawnSync } = require('child_process');
+    const pids = new Set();
+    if (this.proc) pids.add(this.proc.pid);
+    try {
+      const port = new URL(this.url).port || '8188';
+      const py = path.join(this.path, 'python_embeded', 'python.exe').toLowerCase();
+      const ps = `Get-NetTCPConnection -State Listen -LocalPort ${port} -ErrorAction SilentlyContinue | ForEach-Object { Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)" } | ForEach-Object { "$($_.ProcessId)|$($_.ExecutablePath)|$($_.CommandLine)" }`;
+      const out = spawnSync('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf8', windowsHide: true, timeout: 15000 }).stdout || '';
+      for (const line of out.split(/\r?\n/)) {
+        const [pid, exe = '', cmd = ''] = line.split('|');
+        // только «наш» ComfyUI, чужие программы на этом порту не трогаем
+        if (+pid && exe.toLowerCase() === py && cmd.includes('main.py')) pids.add(+pid);
+      }
+    } catch {}
+    for (const pid of pids) spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true });
+    this.proc = null;
+    this.status = 'error';
+    this.message = 'Двигатель выключен';
+  }
 
   // Выгрузить модели из видеопамяти (перед обучением)
   async free() {

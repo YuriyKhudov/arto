@@ -85,6 +85,15 @@ async function init() {
   initTiles();
   bindCompare();
   setInterval(tick, 1000);
+  // «я здесь»: когда все окна Arto закрыты, программа сама выключается вместе с двигателем
+  const winId = Math.random().toString(36).slice(2);
+  const alive = () => fetch('/api/alive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: winId }) }).catch(() => {});
+  alive();
+  setInterval(alive, 20000);
+  addEventListener('pagehide', () => navigator.sendBeacon('/api/bye', winId));
+  addEventListener('pageshow', (e) => { if (e.persisted) alive(); });
+  // идёт рисование или обучение — спросить перед закрытием
+  addEventListener('beforeunload', (e) => { if (state.jobs.some((j) => j.status === 'running')) { e.preventDefault(); e.returnValue = ''; } });
   checkUpdate();
   setInterval(checkUpdate, 3 * 3600 * 1000);
 }
