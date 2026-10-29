@@ -200,4 +200,4 @@ function nearestRatio(ar, allowed) {
   return allowed.reduce((best, a) => (Math.abs(Math.log(parseRatio(a) / r)) < Math.abs(Math.log(parseRatio(best) / r)) ? a : best), allowed[0]);
 }
 
-module.exports = { STYLES, GUARDS, buildPrompts, parseInlineParams, dimsFor, nearestRatio, DEFAULT_NEGATIVE };
+module.exports = { STYLES, RETIRED, GUARDS, buildPrompts, parseInlineParams, dimsFor, nearestRatio, DEFAULT_NEGATIVE };

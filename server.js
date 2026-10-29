@@ -15,7 +15,7 @@ function logError(where, e) {
 process.on('uncaughtException', (e) => { logError('Ошибка', e); process.exit(1); });
 process.on('unhandledRejection', (e) => logError('Ошибка (async)', e));
 
-const { STYLES, GUARDS, buildPrompts, parseInlineParams, dimsFor } = require('./prompt');
+const { STYLES, RETIRED, GUARDS, buildPrompts, parseInlineParams, dimsFor } = require('./prompt');
 const { Comfy, wfGenerate, wfUpscale, wfEdit, wfOutpaint, wfOutpaintUnion, wfTrainLora } = require('./comfy');
 const { toEnglish, preload: preloadTranslator } = require('./translate');
 // библиотека картинок нужна только для сохранения фактуры — если её нет, остальное работает
@@ -384,6 +384,9 @@ async function editInstruction(text, variant = 0, scene = '') {
   if (text === FIX_INSTRUCTION) return text;
   const restyle = restyleIntent(text, scene);
   if (restyle) return restyle;
+  // Qwen-Image 2.1 понимает русский сам — отдаём просьбу художника как есть, как в ComfyUI, без перевода.
+  // Одна приписка: без неё короткие просьбы («убери кота») модель часто не выполняет (проверено: 0 из 3 → 3 из 3)
+  if (edition.edit?.kind === 'qwen21') return `${text.trim().replace(/[.!\s]+$/, '')}. Остальное оставь без изменений.`;
   let en = (await toEnglish(text)).trim().replace(/[.!\s]+$/, '');
   if (!en) en = text;
   return `Edit the image: ${en}. Keep everything that is not mentioned unchanged.${VARIETY[variant % VARIETY.length]}`;
@@ -656,7 +659,7 @@ async function fixFaces(buf, { src, s, prog, findOn = null }) {
 // ---------- сохранение фактуры ----------
 // ИИ-редактор перерисовывает всю картинку и сглаживает мазок. Берём из правки только изменённые места;
 // при retexture — ещё и «перемазываем» их моделью-художником в манере оригинала (оригинал = образец стиля).
-async function keepTexture(orig, edited, { retexture = false, prompt = '', negative = '', seed = 1, prog, maxChange = null, denoise = 0.3 } = {}) {
+async function keepTexture(orig, edited, { retexture = false, prompt = '', negative = '', seed = 1, prog, maxChange = null, denoise = 0.3, cleanRef = false } = {}) {
   let r;
   try { r = await texture().preserveTexture(orig, edited); } catch (e) { logError('Сохранение фактуры', e); return edited; }
   // правка, которая не должна менять стиль (исправление анатомии), перерисовала почти всё — отбрасываем её
@@ -667,7 +670,9 @@ async function keepTexture(orig, edited, { retexture = false, prompt = '', negat
   const sr = edition.styleRef;
   const W = Math.max(64, Math.round(r.W / 64) * 64), H = Math.max(64, Math.round(r.H / 64) * 64);
   const comp = await comfy.upload(r.buf, `tex_${Date.now()}_c.png`);
-  const st = sr ? await comfy.upload(orig, `tex_${Date.now()}_s.${sniffExt(orig)}`) : null;
+  // образец мазка — уже исправленная картинка (мазки оригинала везде, кроме изменённого): иначе образец по плиткам
+  // переносит старое содержимое (узор снятой одежды) на то же место
+  const st = !sr ? null : cleanRef ? comp : await comfy.upload(orig, `tex_${Date.now()}_s.${sniffExt(orig)}`);
   const re = await comfy.run(wfGenerate({
     ckpt: await model('checkpoints', g.ckpt), loras: [],
     // техника — из описания самой картинки (графит, масло…), а не общие «живописные» слова
@@ -718,9 +723,10 @@ function createEdit({ instruction, sources, count, from, isTemp, preserve = true
     // превращение в другую технику меняет всю картинку — «сохранять фактуру» тут нельзя
     if (!(preserve && sources.length === 1) || restyleIntent(instruction)) return out;
     // ИИ-редактор рисует новое в своей манере (гладко, «наклейкой»): перерисовать изменённые места в технике оригинала
+    // в подсказке — только техника: описание оригинала («платье в узор») вернуло бы старое на изменённое место
     const src = from?.jobId ? findJob(from.jobId) : null;
-    const si = src?.images?.[from.index];
-    return keepTexture(sources[0], out, { retexture: true, prompt: si?.finalPrompt || '', negative: src?.negative || '', seed: img.seed, prog, denoise: 0.45 });
+    const st = src?.params?.style && STYLES.find((x) => x.id === (RETIRED[src.params.style] || src.params.style));
+    return keepTexture(sources[0], out, { retexture: true, prompt: st?.core || '', negative: src?.negative || '', seed: img.seed, prog, denoise: 0.45, cleanRef: true });
   });
 }
 
