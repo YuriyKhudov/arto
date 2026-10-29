@@ -9,6 +9,16 @@ async function rgb(buf, W, H, blur) {
   return s.raw().toBuffer();
 }
 
+// «Узорчатость» места: |яркость − размытая яркость|, усреднённая по соседству (0..255)
+const TEXTURE_CUT = 7;
+async function detail(buf, W, H, r) {
+  const g = await sharp(buf).removeAlpha().resize(W, H, { fit: 'fill' }).greyscale().raw().toBuffer();
+  const gb = await sharp(g, { raw: { width: W, height: H, channels: 1 } }).blur(2.5 * r).extractChannel(0).raw().toBuffer();
+  const d = Buffer.alloc(W * H);
+  for (let i = 0; i < d.length; i++) d[i] = Math.min(255, Math.abs(g[i] - gb[i]) * 4);
+  return sharp(d, { raw: { width: W, height: H, channels: 1 } }).blur(6 * r).extractChannel(0).raw().toBuffer();
+}
+
 // Порог по одному каналу (0..255) → маска изменений
 async function maskStep(mask, W, H, blur, cut) {
   const b = await sharp(mask, { raw: { width: W, height: H, channels: 1 } }).blur(blur).extractChannel(0).raw().toBuffer();
@@ -25,13 +35,21 @@ async function preserveTexture(orig, edited, { threshold = 30 } = {}) {
   const { width: W, height: H } = await sharp(orig).metadata();
   // сравниваем слегка размытые версии — так мелкая разница в мазке не считается «изменением»
   const [ob, eb] = await Promise.all([rgb(orig, W, H, 2), rgb(edited, W, H, 2)]);
+  const r = Math.max(W, H) / 1024;
+  // фактура: насколько «узорчато» место (разница с размытой копией, усреднённая по соседству).
+  // Нужна, когда цвет тот же, а рисунок другой: гладкая ткань ↔ узор, однотонная стена ↔ обои
+  const [od, ed] = await Promise.all([detail(orig, W, H, r), detail(edited, W, H, r)]);
   let mask = Buffer.alloc(W * H);
   for (let p = 0, i = 0; p < mask.length; p++, i += 3) {
     const d = Math.max(Math.abs(ob[i] - eb[i]), Math.abs(ob[i + 1] - eb[i + 1]), Math.abs(ob[i + 2] - eb[i + 2]));
-    mask[p] = d > threshold ? 255 : 0;
+    // фактура меняется «в разы» (гладко ↔ узор), а не чуть-чуть, как у перерисованных ИИ линий того же рисунка
+    const t = Math.abs(od[p] - ed[p]);
+    mask[p] = d > threshold || (t > TEXTURE_CUT && t > 0.6 * Math.max(od[p], ed[p])) ? 255 : 0;
   }
-  const r = Math.max(W, H) / 1024;
   mask = await maskStep(mask, W, H, 4 * r, 90);   // убрать «шум» из отдельных точек
+  // закрыть «дыры»: островки «без изменений» внутри изменённого места — это совпавший цвет, а не настоящий оригинал
+  mask = await maskStep(mask, W, H, 24 * r, 25);
+  mask = await maskStep(mask, W, H, 24 * r, 230);
   mask = await maskStep(mask, W, H, 14 * r, 12);  // расширить, чтобы захватить края изменений
   const soft = await sharp(mask, { raw: { width: W, height: H, channels: 1 } }).blur(10 * r).extractChannel(0).raw().toBuffer();
 
