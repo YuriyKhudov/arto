@@ -1014,7 +1014,8 @@ const server = http.createServer(async (req, res) => {
         if (buf) sources.push(buf);
       }
       if (!sources.length) return send(res, 400, { error: 'Добавьте картинку, которую нужно изменить' });
-      const from = body.sources?.[0]?.jobId ? body.sources[0] : null;
+      // from — откуда открыта картинка в редакторе: техника оригинала и что на нём изображено
+      const from = body.sources?.[0]?.jobId ? body.sources[0] : body.from?.jobId && findJob(body.from.jobId) ? { jobId: body.from.jobId, index: +body.from.index || 0 } : null;
       return send(res, 200, createEdit({ instruction, sources: sources.slice(0, 3), count: body.count, from, isTemp: !!body.temp, preserve: body.preserve !== false, quality: body.quality, cfg: body.cfg, steps: body.steps }));
     }
     if (p === '/api/save' && req.method === 'POST') {

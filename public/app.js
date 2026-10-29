@@ -24,7 +24,7 @@ const KIND = { upscale: 'Увеличено ×2', edit: 'Изменение', st
 const state = {
   styles: [], edition: {}, engine: {}, jobs: [],
   params: load('atelier.params', DEFAULT_PARAMS),
-  mode: 'draw', ref: null, sources: [], editCount: 1, editQuality: 'normal',
+  ref: null,
   control: null, // набросок: { url, data | jobId+index | file, mode, strength }
   styleRefs: [], myStyles: [], // образцы стиля: { url, data | jobId+index | file, w }
   page: 'create', galFilter: 'all', galQuery: '',
@@ -64,8 +64,6 @@ async function init() {
   state.version = s.version;
   state.engine = s.engine;
   state.jobs = s.jobs;
-  if (!state.edition.canEdit) $('#modes').hidden = true;
-  $('#lbEdit').hidden = !state.edition.canEdit;
   window.ATELIER = { canEdit: state.edition.canEdit };
   window.toast = toast;
   window.onEditorSaved = (job) => { state.jobs.unshift(job); renderFeed(); };
@@ -109,7 +107,7 @@ async function tick() {
       const fresh = await api('/api/jobs/' + j.id);
       const i = state.jobs.findIndex((x) => x.id === j.id);
       if (i !== -1) state.jobs[i] = fresh;
-      if (fresh.type === 'train' && fresh.status === 'done') { loadMyLoras(); toast('Манера «' + (fresh.trainName || '') + '» готова — выберите её в окне «Стиль»'); }
+      if (fresh.type === 'train' && fresh.status === 'done') { loadMyLoras(); toast('Стиль «' + (fresh.trainName || '') + '» готов — он на странице «Мой стиль»'); }
       if (fresh.status === 'error') toast('Не получилось: ' + (fresh.images.find((x) => x.error)?.error || ''), true);
       if (fresh.status === 'cancelled') { state.jobs = state.jobs.filter((x) => x.id !== j.id); toast('Отменено'); }
     } catch {}
@@ -118,6 +116,7 @@ async function tick() {
     renderFeed();
     running.forEach((j) => updateProgress(state.jobs.find((x) => x.id === j.id) || j));
     if (state.page === 'gallery') renderGallery();
+    if (state.page === 'styles') renderStyles();
   }
 }
 
@@ -190,7 +189,6 @@ function syncControls() {
   $$('#guardSeg button').forEach((b) => b.classList.toggle('on', (p.guards || []).includes(b.dataset.g)));
   renderTaste();
   if (document.activeElement !== $('#countInput')) $('#countInput').value = p.count;
-  $$('#editCountSeg button').forEach((b) => b.classList.toggle('on', +b.dataset.v === +state.editCount));
   for (const k of ['stylize', 'chaos', 'weird', 'iw', 'sw']) {
     $('#' + k).value = p[k];
     $('#v' + k[0].toUpperCase() + k.slice(1)).textContent = LEVELS[k](+p[k]);
@@ -205,28 +203,9 @@ function syncControls() {
   renderSketch();
 }
 
-function setMode(mode) {
-  state.mode = mode;
-  $$('#modes button').forEach((b) => b.classList.toggle('on', b.dataset.mode === mode));
-  const edit = mode === 'edit';
-  $('#drawbar').hidden = edit;
-  $('#editbar').hidden = !edit;
-  $('#more').hidden = true;
-  $('#sources').hidden = !edit;
-  $('#refBtn').hidden = edit;
-  $('#styleBtn').hidden = edit;
-  $('#sketchBtn').hidden = edit;
-  if (edit) $('#sketchTray').hidden = true;
-  if (edit) $('#styleTray').hidden = true;
-  $('#goBtn').textContent = edit ? 'Изменить' : 'Нарисовать';
-  $('#prompt').placeholder = edit ? 'Что изменить? Например: сделай ночь, а в окне — тёплый свет' : 'Опишите, что нарисовать…   (Shift+Enter — новая строка: несколько строк = серия)';
-  renderRef();
-  renderSources();
-}
-
 function renderRef() {
   const note = $('#refNote');
-  if (!state.ref || state.mode === 'edit') { note.hidden = true; $('#refThumb').hidden = true; $('#refX').hidden = true; return; }
+  if (!state.ref) { note.hidden = true; $('#refThumb').hidden = true; $('#refX').hidden = true; return; }
   $('#refThumb').src = state.ref;
   $('#refThumb').hidden = false;
   $('#refX').hidden = false;
@@ -236,19 +215,6 @@ function renderRef() {
     <button id="refClear">× Убрать</button>`;
   $('#refClear').onclick = () => { state.ref = null; syncControls(); };
   $('#iwInline').oninput = (e) => { state.params.iw = +e.target.value; saveParams(); e.target.nextElementSibling.textContent = LEVELS.iw(state.params.iw); $('#iw').value = state.params.iw; };
-}
-
-function renderSources() {
-  const box = $('#sources');
-  box.innerHTML = state.sources.map((s, i) => `<div class="src"><img src="${s.url}" alt=""><button data-rm="${i}" title="Убрать">×</button></div>`).join('')
-    + (state.sources.length < 3 ? `<label class="src add" title="Добавить картинку"><input type="file" accept="image/*" hidden id="srcInput"><span>+</span><small>${state.sources.length ? 'ещё' : 'картинка'}</small></label>` : '')
-    + (state.sources.length ? '' : '<p class="src-hint">Добавьте картинку, которую нужно изменить — кнопкой «+», перетаскиванием или Ctrl+V. Или откройте любую работу и нажмите «Изменить».</p>');
-  box.onclick = (e) => {
-    const rm = e.target.closest('[data-rm]');
-    if (rm) { state.sources.splice(+rm.dataset.rm, 1); renderSources(); }
-  };
-  const inp = $('#srcInput');
-  if (inp) inp.onchange = (e) => { const f = e.target.files[0]; if (f) addImage(f); };
 }
 
 // ---------------- «Сила просьбы» и «Проработка» для ИИ-редактора (общие для правки и редактора) ----------------
@@ -263,7 +229,7 @@ function bindKnobs() {
   const label = { cfg: (v) => (v <= 1 ? 'обычно' : v < 2 ? 'заметно' : v < 2.75 ? 'сильно' : 'очень сильно'), steps: (v) => (v <= 6 ? 'быстро' : v <= 10 ? 'обычно' : v <= 14 ? 'тщательно' : 'очень тщательно') };
   const sync = () => {
     const k = editKnobs();
-    for (const p of ['edit', 'edAi']) {
+    for (const p of ['edAi']) {
       const c = document.getElementById(p + 'Cfg'), s = document.getElementById(p + 'Steps');
       if (!c) continue;
       c.value = k.cfg; s.value = k.steps;
@@ -271,7 +237,7 @@ function bindKnobs() {
       document.getElementById(p + 'StepsV').textContent = label.steps(k.steps);
     }
   };
-  for (const p of ['edit', 'edAi']) for (const key of ['Cfg', 'Steps']) {
+  for (const p of ['edAi']) for (const key of ['Cfg', 'Steps']) {
     const el = document.getElementById(p + key);
     if (el) el.oninput = () => { const k = editKnobs(); k[key.toLowerCase()] = +el.value; try { localStorage.setItem('arto.editKnobs', JSON.stringify(k)); } catch {} sync(); };
   }
@@ -293,13 +259,14 @@ async function loadMyLoras() {
   try { state.myLoras = await api('/api/loras'); } catch { state.myLoras = []; }
   const cur = $('#myLora').value;
   $('#myLora').innerHTML = '<option value="">— нет —</option>' + state.myLoras.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('')
-    + (state.myLoras.length ? '<option value="__del">— удалить стиль…</option>' : '');
+;
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem('arto.manner') || '{}'); } catch {}
   const want = cur || saved.id;
   if (state.myLoras.some((l) => l.id === want)) $('#myLora').value = want;
   if (!cur && saved.w) $('#myLoraPower').value = saved.w;
   renderManner();
+  if (state.page === 'styles') renderStyles();
 }
 const myLoraParam = () => ($('#myLora').value ? { id: $('#myLora').value, w: +$('#myLoraPower').value } : null);
 // С манерой всё лишнее прячем: она сама задаёт технику и фактуру, образцы стиля только мешают
@@ -307,7 +274,6 @@ function renderManner() {
   const on = !!$('#myLora').value;
   const w = +$('#myLoraPower').value;
   $('#myLoraPowerWrap').hidden = !on;
-  $('#mlShare').hidden = !on;
   $('#vMl').textContent = w < 0.65 ? 'слегка' : w <= 0.9 ? 'как в образцах' : 'сильнее';
   $('#mlNote').hidden = !on;
   $('#stRefs').hidden = on;
@@ -322,26 +288,12 @@ function bindTrain() {
   let files = [];
   let source = 'files';
   let quality = 'normal';
-  $('#myLora').onchange = async (e) => {
-    if (e.target.value === '__del') {
-      e.target.value = '';
-      const list = state.myLoras.map((l, i) => (i + 1) + '. ' + l.name).join('\n');
-      const l = state.myLoras[+prompt('Какой стиль удалить? Введите номер:\n' + list) - 1];
-      if (l && confirm('Удалить стиль «' + l.name + '»?')) { await api('/api/loras/' + l.id, null, 'DELETE'); await loadMyLoras(); }
-    }
+  $('#myLora').onchange = (e) => {
     if (e.target.value) $('#styleBtn').classList.add('on');
     renderManner();
   };
+  $('#mlManage').onclick = () => showPage('styles');
   $('#myLoraPower').oninput = renderManner;
-  // обмен стилями: один файл .artostyle
-  $('#mlShare').onclick = () => {
-    const id = $('#myLora').value;
-    if (!id) return;
-    const a = document.createElement('a');
-    a.href = '/api/loras/' + id + '/export';
-    a.click();
-    toast('Сохраняю стиль в файл — его можно отправить другу. Он добавит его кнопкой «Добавить стиль из файла»');
-  };
   $('#mlImport').onchange = async (e) => {
     const f = e.target.files[0];
     e.target.value = '';
@@ -352,9 +304,7 @@ function bindTrain() {
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Не получилось');
       await loadMyLoras();
-      $('#myLora').value = j.id;
-      $('#myLora').dispatchEvent(new Event('change'));
-      toast('Стиль «' + j.name + '» добавлен — он уже выбран, можно рисовать');
+      toast('Стиль «' + j.name + '» добавлен — нажмите «Рисовать в этом стиле»');
     } catch (err) { toast(err.message, true); }
   };
   $('#trainOpen').onclick = async () => {
@@ -392,7 +342,8 @@ function bindTrain() {
       const job = await api('/api/train', body);
       $('#trainBox').hidden = true;
       addJob(job);
-      toast('Обучение началось — следите за прогрессом в ленте');
+      toast('Обучение началось — прогресс здесь и в ленте');
+      renderStyles();
     } catch (e) { toast(e.message, true); }
     $('#trGo').disabled = false;
   };
@@ -482,11 +433,7 @@ async function blobToDataUrl(blob, max = 2048) {
 // Картинка, пришедшая снаружи (файл, вставка, перетаскивание)
 async function addImage(blob) {
   const url = await blobToDataUrl(blob);
-  if (state.mode === 'edit') {
-    if (state.sources.length >= 3) return toast('Можно не больше трёх картинок', true);
-    state.sources.push({ url, data: url });
-    renderSources();
-  } else if (!$('#sketchTray').hidden) {
+  if (!$('#sketchTray').hidden) {
     setControl({ url: await blobToDataUrl(blob, 1536), jobId: undefined, file: undefined });
   } else if (!$('#styleTray').hidden) {
     addStyleRef({ url: await blobToDataUrl(blob, 1024) });
@@ -503,7 +450,7 @@ async function go() {
   if (!text) { $('#prompt').focus(); return; }
   if (state.engine.status !== 'ready') return toast(state.engine.message, true);
   // просят реализм, а выбрана рисовальная техника — только подсказка, рисуем с настройками художника
-  if (state.mode === 'draw' && !$('#myLora').value && /реалист|фотореал|как фото|realistic|photoreal/i.test(text)
+  if (!$('#myLora').value && /реалист|фотореал|как фото|realistic|photoreal/i.test(text)
       && !['realism', 'raw', 'oil'].includes(state.params.style)) {
     toast(`Рисую в технике «${styleName(state.params.style)}». Нужен реализм — выберите технику «Реализм».`);
   }
@@ -511,26 +458,21 @@ async function go() {
   btn.disabled = true;
   try {
     let job;
-    if (state.mode === 'edit') {
-      if (!state.sources.length) { toast('Сначала добавьте картинку', true); btn.disabled = false; return; }
-      job = await api('/api/edit', { instruction: text, count: state.editCount, quality: state.editQuality, sources: state.sources.map((s) => s.ref || s.data), ...editKnobs() });
-    } else {
-      const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
-      if (lines.length > 1) {
-        const seriesSeed = Math.floor(Math.random() * 2 ** 31);
-        const seriesId = Date.now().toString(36);
-        for (let i = lines.length - 1; i >= 0; i--) {
-          const j = await api('/api/imagine', { prompt: lines[i], params: { ...state.params, myLora: myLoraParam(), seed: seriesSeed, series: { id: seriesId, n: i + 1, of: lines.length } }, ref: state.ref, styles: styleRefPayload(), control: controlPayload() });
-          addJob(j);
-        }
-        $('#prompt').value = '';
-        autosize();
-        btn.disabled = false;
-        toast(`Серия из ${lines.length} работ поставлена в очередь`);
-        return;
+    const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+    if (lines.length > 1) {
+      const seriesSeed = Math.floor(Math.random() * 2 ** 31);
+      const seriesId = Date.now().toString(36);
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const j = await api('/api/imagine', { prompt: lines[i], params: { ...state.params, myLora: myLoraParam(), seed: seriesSeed, series: { id: seriesId, n: i + 1, of: lines.length } }, ref: state.ref, styles: styleRefPayload(), control: controlPayload() });
+        addJob(j);
       }
-      job = await api('/api/imagine', { prompt: text, params: { ...state.params, myLora: myLoraParam() }, ref: state.ref, styles: styleRefPayload(), control: controlPayload() });
+      $('#prompt').value = '';
+      autosize();
+      btn.disabled = false;
+      toast(`Серия из ${lines.length} работ поставлена в очередь`);
+      return;
     }
+    job = await api('/api/imagine', { prompt: text, params: { ...state.params, myLora: myLoraParam() }, ref: state.ref, styles: styleRefPayload(), control: controlPayload() });
     addJob(job);
     $('#prompt').value = '';
     autosize();
@@ -574,21 +516,20 @@ async function action(act, job, index) {
         addJob(await api('/api/upscale', { jobId: job.id, index, mode: { upscale: 'simple', 'upscale-art': 'art', 'upscale-fix': 'fix' }[act] }));
         break;
       case 'edit':
-        closeLightbox();
-        setMode('edit');
-        state.sources = [{ url: '/images/' + job.images[index].file, ref: { jobId: job.id, index } }];
-        renderSources();
-        $('main').scrollTo({ top: 0, behavior: 'smooth' });
-        $('#prompt').focus();
-        return;
       case 'studio':
         closeLightbox();
         document.querySelector('#edTitle').value = job.prompt || '';
         await Editor.open({ src: '/images/' + job.images[index].file, source: { jobId: job.id, index } });
+        if (state.edition.canEdit) $('#edAiText').focus();
         return;
       case 'reuse':
         closeLightbox();
-        setMode(job.type === 'edit' ? 'edit' : 'draw');
+        // правку словами повторяем в редакторе — на той же исходной картинке
+        if (job.type === 'edit' && job.sources?.length) {
+          document.querySelector('#edTitle').value = job.prompt || '';
+          await Editor.open({ src: '/images/' + job.sources[0], text: job.rawPrompt || job.prompt });
+          return;
+        }
         $('#prompt').value = job.rawPrompt || job.prompt;
         if (job.control) { state.control = { url: '/images/' + job.control.file, file: job.control.file, mode: job.control.mode, strength: job.control.strength }; $('#sketchTray').hidden = false; }
         if (job.styleFiles?.length) {
@@ -601,7 +542,6 @@ async function action(act, job, index) {
         return;
       case 'as-sketch':
         closeLightbox();
-        setMode('draw');
         state.sketchMode = 'photo';
         state.control = null;
         setControl({ url: '/images/' + job.images[index].file, jobId: job.id, index, mode: 'photo' });
@@ -610,13 +550,11 @@ async function action(act, job, index) {
         return;
       case 'as-style':
         closeLightbox();
-        setMode('draw');
         addStyleRef({ url: '/images/' + job.images[index].file, jobId: job.id, index });
         $('main').scrollTo({ top: 0, behavior: 'smooth' });
         return;
       case 'as-ref':
         closeLightbox();
-        setMode('draw');
         state.ref = await blobToDataUrl(await (await fetch('/images/' + job.images[index].file)).blob());
         syncControls();
         $('#prompt').focus();
@@ -1076,17 +1014,19 @@ function renderPrompts() {
 }
 
 function usePrompt(p) {
-  showPage('create');
-  setMode(p.kind === 'edit' ? 'edit' : 'draw');
-  if (p.kind !== 'edit') {
-    for (const [k, v] of Object.entries(p.params || {})) if (v != null && v !== '') state.params[k] = v;
-    saveParams();
-    syncControls();
+  if (p.kind === 'edit') {
+    // текст правки — в поле ИИ редактора: откройте любую картинку, и он уже там
+    window.pendingEditText = p.prompt;
+    return toast('Откройте картинку — из ленты кнопкой «Изменить» или пунктом «Редактор» слева. Текст уже будет в поле ИИ');
   }
+  showPage('create');
+  for (const [k, v] of Object.entries(p.params || {})) if (v != null && v !== '') state.params[k] = v;
+  saveParams();
+  syncControls();
   $('#prompt').value = p.prompt;
   autosize();
   $('#prompt').focus();
-  toast('Запрос вставлен — нажмите «' + (p.kind === 'edit' ? 'Изменить' : 'Нарисовать') + '»');
+  toast('Запрос вставлен — нажмите «Нарисовать»');
 }
 
 function bindPrompts() {
@@ -1132,6 +1072,51 @@ function showPage(page) {
   if (page === 'gallery') renderGallery();
   if (page === 'prompts') loadPrompts();
   if (page === 'boards') { state.board = null; loadBoards(); }
+  if (page === 'styles') renderStyles();
+}
+
+// ---------------- страница «Мой стиль» ----------------
+function renderStyles() {
+  const list = state.myLoras || [];
+  const training = state.jobs.filter((j) => j.type === 'train' && j.status === 'running');
+  $('#mlTraining').innerHTML = training.map((j) => {
+    const p = j.images[0]?.progress;
+    return `<div class="ml-run"><b>Учу стиль «${esc(j.trainName || '')}»</b><span class="muted">${p ? (p.pct || 0) + '%' + (p.eta ? ' · осталось ~' + Math.ceil(p.eta / 60) + ' мин' : '') : 'готовлюсь…'}</span></div>`;
+  }).join('');
+  $('#mlEmpty').hidden = list.length > 0 || training.length > 0;
+  $('#mlList').innerHTML = list.map((l) => `<div class="ml-card" data-id="${l.id}">
+      <div class="ml-thumb">${l.preview ? `<img src="/images/${esc(l.preview)}" alt="" loading="lazy">` : '<span>✎</span>'}</div>
+      <div class="ml-name">${esc(l.name)}${l.imported ? ' <small class="muted">· от друга</small>' : ''}</div>
+      <div class="ml-btns">
+        <button class="btn primary" data-ml="use">Рисовать в этом стиле</button>
+        <button class="btn" data-ml="share" title="Сохранить стиль в файл и отправить другу">Поделиться</button>
+        <button class="btn danger" data-ml="del" title="Удалить стиль">✕</button>
+      </div>
+    </div>`).join('');
+  $('#mlList').onclick = async (e) => {
+    const b = e.target.closest('[data-ml]');
+    if (!b) return;
+    const l = list.find((x) => x.id === b.closest('[data-id]').dataset.id);
+    if (!l) return;
+    if (b.dataset.ml === 'use') {
+      showPage('create');
+      $('#myLora').value = l.id;
+      $('#myLora').dispatchEvent(new Event('change'));
+      $('#styleTray').hidden = false;
+      $('#sketchTray').hidden = true;
+      renderStyleRefs();
+      $('#prompt').focus();
+      toast('Выбран стиль «' + l.name + '» — опишите, что нарисовать');
+    } else if (b.dataset.ml === 'share') {
+      const a = document.createElement('a');
+      a.href = '/api/loras/' + l.id + '/export';
+      a.click();
+      toast('Сохраняю стиль в файл — его можно отправить другу. Он добавит его кнопкой «Добавить стиль из файла»');
+    } else if (b.dataset.ml === 'del' && confirm('Удалить стиль «' + l.name + '»?')) {
+      await api('/api/loras/' + l.id, null, 'DELETE');
+      await loadMyLoras();
+    }
+  };
 }
 
 function renderExamples() {
@@ -1187,7 +1172,6 @@ function bindEvents() {
     e.target.value = '';
     if (f) { $('#edTitle').value = f.name.replace(/.[^.]+$/, ''); Editor.open({ src: URL.createObjectURL(f) }); }
   };
-  $('#modes').onclick = (e) => { const b = e.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode); };
   $('#goBtn').onclick = go;
   $('#prompt').addEventListener('input', autosize);
   $('#prompt').addEventListener('keydown', (e) => {
@@ -1206,7 +1190,6 @@ function bindEvents() {
     if (v >= 1 && v <= 32) { state.params.count = v; saveParams(); $$('#countSeg button').forEach((b) => b.classList.toggle('on', +b.dataset.v === v)); }
   });
   $('#countInput').addEventListener('change', (e) => { e.target.value = state.params.count; });
-  segHandler('#editCountSeg', (b) => { state.editCount = +b.dataset.v; });
   for (const k of ['stylize', 'chaos', 'weird', 'iw']) {
     $('#' + k).addEventListener('input', (e) => { state.params[k] = +e.target.value; saveParams(); syncControls(); });
   }
@@ -1237,7 +1220,6 @@ function bindEvents() {
   window.onEditorToSketch = (dataUrl) => {
     state.sketchMode = 'sketch';
     state.control = null;
-    setMode('draw');
     showPage('create');
     setControl({ url: dataUrl, mode: 'sketch' });
     $('#prompt').focus();

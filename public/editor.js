@@ -274,7 +274,7 @@ const Editor = (() => {
     redraw();
   }
 
-  async function open({ src, source, blank }) {
+  async function open({ src, source, blank, text }) {
     const img = await loadImage(src);
     ed.img = makeCanvas(img.naturalWidth, img.naturalHeight);
     ed.img.getContext('2d').drawImage(img, 0, 0);
@@ -297,6 +297,29 @@ const Editor = (() => {
     else selectTool(ed.tool.id);
     $('#edToSketch').classList.toggle('primary', !!blank);
     $('#edAiBox').hidden = !window.ATELIER?.canEdit;
+    ed.extra = [];
+    renderExtra();
+    // текст правки: повтор из ленты или из «Моих промптов»
+    if (text || window.pendingEditText) { $('#edAiText').value = text || window.pendingEditText; window.pendingEditText = null; }
+  }
+
+  // ещё 1–2 картинки для ИИ — «совместить»: надеть платье со второй картинки, поставить предмет с третьей
+  function renderExtra() {
+    const box = $('#edAiExtra');
+    box.innerHTML = ed.extra.map((u, i) => `<div class="src"><img src="${u}" alt=""><button data-rm="${i}" title="Убрать">×</button></div>`).join('')
+      + (ed.extra.length < 2 ? `<label class="src add" title="Добавить ещё картинку, чтобы совместить: например, платье, которое надеть, или предмет, который поставить"><input type="file" accept="image/*" hidden><span>+</span><small>картинка</small></label>` : '');
+    box.onclick = (e) => { const rm = e.target.closest('[data-rm]'); if (rm) { ed.extra.splice(+rm.dataset.rm, 1); renderExtra(); } };
+    const inp = box.querySelector('input');
+    if (inp) inp.onchange = async (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      const img = await loadImage(URL.createObjectURL(f));
+      const k = Math.min(1, 1536 / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = makeCanvas(Math.round(img.naturalWidth * k), Math.round(img.naturalHeight * k));
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      ed.extra.push(c.toDataURL('image/png'));
+      renderExtra();
+    };
   }
 
   function close() {
@@ -337,7 +360,7 @@ const Editor = (() => {
     try {
       const r = await fetch('/api/edit', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instruction, sources: [ed.img.toDataURL('image/png')], count: ed.aiCount || 1, temp: true, ...(window.editKnobs ? window.editKnobs() : {}) }),
+        body: JSON.stringify({ instruction, sources: [ed.img.toDataURL('image/png'), ...(ed.extra || [])], from: ed.source, count: ed.aiCount || 1, temp: true, ...(window.editKnobs ? window.editKnobs() : {}) }),
       });
       let job = await r.json();
       if (!r.ok) throw new Error(job.error);
