@@ -93,8 +93,11 @@ async function init() {
   addEventListener('pageshow', (e) => { if (e.persisted) alive(); });
   // идёт рисование или обучение — спросить перед закрытием
   addEventListener('beforeunload', (e) => { if (state.jobs.some((j) => j.status === 'running')) { e.preventDefault(); e.returnValue = ''; } });
+  // окно Arto часто открыто днями — проверяем и по таймеру, и когда художник возвращается в окно
   checkUpdate();
-  setInterval(checkUpdate, 3 * 3600 * 1000);
+  setInterval(checkUpdate, 30 * 60 * 1000);
+  let lastCheck = Date.now();
+  addEventListener('focus', () => { if (Date.now() - lastCheck > 10 * 60 * 1000) { lastCheck = Date.now(); checkUpdate(); } });
 }
 
 async function tick() {
