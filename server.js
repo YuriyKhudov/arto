@@ -342,8 +342,34 @@ function pngSize(buf) {
 // Запустить ИИ-редактор на загруженных картинках. Pro — Qwen-Image-Edit, Lite — FLUX.2 klein.
 // Понятная модели инструкция: английский + «остальное не трогай»; варианты отличаются силой изменения
 const VARIETY = ['', ' Make the change clearly visible.', ' Keep the change subtle and natural.', ' Make the change bold and expressive.'];
+// «Преврати в другую технику» (фото, акварель…): машинный перевод путает такие просьбы
+// («сделай из картины фото» → «сфотографируй картину»), поэтому даём редактору точную формулировку.
+// Ищем глагол превращения и технику в пределах нескольких слов — опечатки в остальном не мешают.
+const KEEP = ' Keep the same people, faces, pose, objects, framing and composition.';
+const RESTYLE = [
+  [/фото|фотограф|как в жизни|фотореал/, 'Turn this artwork into a realistic photograph: real skin with natural texture, real hair and fabric, natural camera lighting, shallow depth of field, no brush strokes, no paint or drawing texture.'],
+  [/акварел/, 'Repaint the whole image as a loose watercolor painting on watercolor paper: transparent washes, soft bleeding edges, white paper showing through.'],
+  [/масл|маслян/, 'Repaint the whole image as an oil painting on canvas with visible thick brushstrokes.'],
+  [/карандаш|графит/, 'Redraw the whole image as a graphite pencil drawing on white paper: pencil lines and hatching, no color.'],
+  [/угл[её]м|уголь|угольн/, 'Redraw the whole image as a charcoal drawing on textured paper: bold charcoal strokes, rich blacks, no color.'],
+  [/туш[ьи]|пером/, 'Redraw the whole image as a pen and black ink drawing on white paper: ink lines and hatching, no color.'],
+  [/пастел/, 'Repaint the whole image as a soft pastel drawing on toned paper with chalky strokes.'],
+  [/аниме|мульт/, 'Redraw the whole image in anime illustration style with clean lines and cel shading.'],
+];
+const RESTYLE_VERB = /(^|[\s,])(сделай|сделать|преврати|превратить|переделай|переделать|переведи|перерисуй|перерисовать|измени|поменяй|как|в виде|в стиле)\S*(\s+\S+){0,4}?\s+/;
+function restyleIntent(text) {
+  const t = ' ' + String(text).toLowerCase().replace(/ё/g, 'е') + ' ';
+  for (const [re, en] of RESTYLE) {
+    const m = new RegExp(RESTYLE_VERB.source + '(в\\s+|во\\s+)?(' + re.source + ')').exec(t);
+    if (m) return en + KEEP;
+  }
+  return null;
+}
+
 async function editInstruction(text, variant = 0) {
   if (text === FIX_INSTRUCTION) return text;
+  const restyle = restyleIntent(text);
+  if (restyle) return restyle;
   let en = (await toEnglish(text)).trim().replace(/[.!\s]+$/, '');
   if (!en) en = text;
   return `Edit the image: ${en}. Keep everything that is not mentioned unchanged.${VARIETY[variant % VARIETY.length]}`;
@@ -607,7 +633,8 @@ function createEdit({ instruction, sources, count, from, isTemp, preserve = true
     const en = await editInstruction(instruction, img.index);
     img.finalPrompt = en; // «как ИИ понял запрос» — видно в подробностях
     const out = await runEdit({ names, firstBuf: sources[0], instruction: en, seed: img.seed, prog });
-    if (!(preserve && sources.length === 1)) return out;
+    // превращение в другую технику меняет всю картинку — «сохранять фактуру» тут нельзя
+    if (!(preserve && sources.length === 1) || restyleIntent(instruction)) return out;
     // ИИ-редактор рисует новое в своей манере (гладко, «наклейкой»): перерисовать изменённые места в технике оригинала
     const src = from?.jobId ? findJob(from.jobId) : null;
     const si = src?.images?.[from.index];

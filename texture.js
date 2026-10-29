@@ -19,6 +19,29 @@ async function detail(buf, W, H, r) {
   return sharp(d, { raw: { width: W, height: H, channels: 1 } }).blur(6 * r).extractChannel(0).raw().toBuffer();
 }
 
+// Минимум и максимум каждого канала в квадрате (2k+1)×(2k+1) — в два прохода (строки, затем столбцы)
+function minMax(px, W, H, k) {
+  const pass = (src, horiz, isMax) => {
+    const dst = Buffer.alloc(src.length);
+    const [n, m] = horiz ? [H, W] : [W, H]; // n линий длиной m
+    for (let a = 0; a < n; a++) {
+      for (let b = 0; b < m; b++) {
+        const from = Math.max(0, b - k), to = Math.min(m - 1, b + k);
+        for (let c = 0; c < 3; c++) {
+          let v = isMax ? 0 : 255;
+          for (let t = from; t <= to; t++) {
+            const s = src[((horiz ? a * W + t : t * W + a) * 3) + c];
+            if (isMax ? s > v : s < v) v = s;
+          }
+          dst[((horiz ? a * W + b : b * W + a) * 3) + c] = v;
+        }
+      }
+    }
+    return dst;
+  };
+  return [pass(pass(px, true, false), false, false), pass(pass(px, true, true), false, true)];
+}
+
 // Порог по одному каналу (0..255) → маска изменений
 async function maskStep(mask, W, H, blur, cut) {
   const b = await sharp(mask, { raw: { width: W, height: H, channels: 1 } }).blur(blur).extractChannel(0).raw().toBuffer();
@@ -39,9 +62,15 @@ async function preserveTexture(orig, edited, { threshold = 30 } = {}) {
   // фактура: насколько «узорчато» место (разница с размытой копией, усреднённая по соседству).
   // Нужна, когда цвет тот же, а рисунок другой: гладкая ткань ↔ узор, однотонная стена ↔ обои
   const [od, ed] = await Promise.all([detail(orig, W, H, r), detail(edited, W, H, r)]);
+  // ИИ чуть сдвигает и перерисовывает линии (на 1–3 px) — для штриха это не изменение.
+  // Точка «не менялась», если такой же цвет есть рядом в другой картинке (в обе стороны)
+  const k = Math.max(1, Math.round(3 * r));
+  const [oLo, oHi] = minMax(ob, W, H, k), [eLo, eHi] = minMax(eb, W, H, k);
+  const out1 = (v, lo, hi) => (v < lo ? lo - v : v > hi ? v - hi : 0);
   let mask = Buffer.alloc(W * H);
   for (let p = 0, i = 0; p < mask.length; p++, i += 3) {
-    const d = Math.max(Math.abs(ob[i] - eb[i]), Math.abs(ob[i + 1] - eb[i + 1]), Math.abs(ob[i + 2] - eb[i + 2]));
+    let d = 0;
+    for (let c = 0; c < 3; c++) d = Math.max(d, Math.max(out1(eb[i + c], oLo[i + c], oHi[i + c]), out1(ob[i + c], eLo[i + c], eHi[i + c])));
     // фактура меняется «в разы» (гладко ↔ узор), а не чуть-чуть, как у перерисованных ИИ линий того же рисунка
     const t = Math.abs(od[p] - ed[p]);
     mask[p] = d > threshold || (t > TEXTURE_CUT && t > 0.6 * Math.max(od[p], ed[p])) ? 255 : 0;
