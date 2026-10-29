@@ -38,6 +38,14 @@ const mergeCfg = (a, b) => {
   return a;
 };
 const config = mergeCfg(readCfg(path.join(ROOT, 'atelier.config.json')), readCfg(path.join(DATA, 'local.json')));
+{
+  const loc = readCfg(path.join(DATA, 'local.json'));
+  const le = loc.editions?.[config.edition]?.edit;
+  if (le && /qwen_image_edit_2511/i.test(le.unet || '') && config.editions[config.edition]?.edit) {
+    const base = readCfg(path.join(ROOT, 'atelier.config.json')).editions[config.edition].edit;
+    config.editions[config.edition].edit = base; // берём новый редактор из общих настроек
+  }
+}
 const updater = require('./update');
 const edition = { id: config.edition, ...config.editions[config.edition] };
 if (process.env.ARTO_COMFY_URL) config.comfy.url = process.env.ARTO_COMFY_URL; // только для проверок разработчика
@@ -347,8 +355,10 @@ const VARIETY = ['', ' Make the change clearly visible.', ' Keep the change subt
 // («сделай из картины фото» → «сфотографируй картину»), поэтому даём редактору точную формулировку.
 // Ищем глагол превращения и технику в пределах нескольких слов — опечатки в остальном не мешают.
 const KEEP = ' Keep the same people, faces, pose, objects, framing and composition.';
+// Qwen-Image 2.1 бережёт исходник и «пускает» новую технику, только когда видит описание сцены и <image1> (проверено)
+const PHOTO_Q21 = (scene) => `Photorealistic photograph of the same scene as <image1>${scene ? ': ' + scene : ''}. Shot on a professional camera, 85mm lens, real skin texture, real fabric, realistic lighting, sharp focus. Replace all paint, pastel, charcoal and drawing texture with real photographic detail.`;
 const RESTYLE = [
-  [/фото|фотограф|как в жизни|фотореал/, 'Turn this artwork into a realistic photograph: real skin with natural texture, real hair and fabric, natural camera lighting, shallow depth of field, no brush strokes, no paint or drawing texture.'],
+  [/фото|фотограф|как в жизни|фотореал/, 'Turn this artwork into a realistic photograph: real skin with natural texture, real hair and fabric, natural camera lighting, shallow depth of field, no brush strokes, no paint or drawing texture.', PHOTO_Q21],
   [/акварел/, 'Repaint the whole image as a loose watercolor painting on watercolor paper: transparent washes, soft bleeding edges, white paper showing through.'],
   [/масл|маслян/, 'Repaint the whole image as an oil painting on canvas with visible thick brushstrokes.'],
   [/карандаш|графит/, 'Redraw the whole image as a graphite pencil drawing on white paper: pencil lines and hatching, no color.'],
@@ -358,26 +368,30 @@ const RESTYLE = [
   [/аниме|мульт/, 'Redraw the whole image in anime illustration style with clean lines and cel shading.'],
 ];
 const RESTYLE_VERB = /(^|[\s,])(сделай|сделать|преврати|превратить|переделай|переделать|переведи|перерисуй|перерисовать|измени|поменяй|как|в виде|в стиле)\S*(\s+\S+){0,4}?\s+/;
-function restyleIntent(text) {
+function restyleIntent(text, scene = '') {
   const t = ' ' + String(text).toLowerCase().replace(/ё/g, 'е') + ' ';
-  for (const [re, en] of RESTYLE) {
+  for (const [re, en, q21] of RESTYLE) {
     const m = new RegExp(RESTYLE_VERB.source + '(в\\s+|во\\s+)?(' + re.source + ')').exec(t);
-    if (m) return en + KEEP;
+    if (!m) continue;
+    if (edition.edit?.kind !== 'qwen21') return en + KEEP;
+    // Qwen-Image 2.1: картинка — <image1>, сцена — словами
+    return (q21 ? q21(scene) : en.replace('the whole image', `the whole image <image1>${scene ? ' (' + scene + ')' : ''}`)) + KEEP;
   }
   return null;
 }
 
-async function editInstruction(text, variant = 0) {
+async function editInstruction(text, variant = 0, scene = '') {
   if (text === FIX_INSTRUCTION) return text;
-  const restyle = restyleIntent(text);
+  const restyle = restyleIntent(text, scene);
   if (restyle) return restyle;
   let en = (await toEnglish(text)).trim().replace(/[.!\s]+$/, '');
   if (!en) en = text;
   return `Edit the image: ${en}. Keep everything that is not mentioned unchanged.${VARIETY[variant % VARIETY.length]}`;
 }
 
-async function runEdit({ names, firstBuf, instruction, seed, prog, inpaint = null }) {
-  const e = edition.edit;
+async function runEdit({ names, firstBuf, instruction, seed, prog, inpaint = null, cfg = null, steps = null }) {
+  if (modelsDl) throw new Error(`Arto докачивает ${modelsDl.what} — ${modelsDl.pct}%. Это один раз, подождите немного.`);
+  const e = { ...edition.edit, ...(cfg ? { cfg } : {}), ...(steps ? { steps } : {}) };
   const opts = {
     images: names, instruction, seed, inpaint,
     edit: {
@@ -552,6 +566,58 @@ function createOutpaint(src, index, { mode = 'wide', amount = 0.4, ar = null } =
   });
 }
 
+// ---------- новые модели после обновления: докачать, а старые (скачанные Arto) — удалить ----------
+// Чтобы у тех, кто обновляется, не нужно было запускать install.bat, и не копились лишние гигабайты.
+let modelsDl = null; // { what, pct } — пока качаем
+function findModelFile(folder, name, depth = 3) {
+  const walk = (dir, d) => {
+    let list = [];
+    try { list = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+    for (const x of list) if (x.isFile() && x.name === name) return path.join(dir, x.name);
+    if (d > 0) for (const x of list) if (x.isDirectory()) { const f = walk(path.join(dir, x.name), d - 1); if (f) return f; }
+    return null;
+  };
+  return walk(path.join(config.comfy.path, 'ComfyUI', 'models', folder), depth);
+}
+async function updateModels() {
+  const e = edition.edit;
+  if (!e?.download || !config.comfy.path) return;
+  for (const [key, [folder, url, what]] of Object.entries(e.download)) {
+    if (findModelFile(folder, e[key])) continue;
+    const dst = path.join(config.comfy.path, 'ComfyUI', 'models', folder, 'atelier', e[key]);
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    modelsDl = { what, pct: 0 };
+    console.log('Докачиваю ' + what + '…');
+    try {
+      const have = fs.existsSync(dst + '.part') ? fs.statSync(dst + '.part').size : 0; // продолжить с того же места
+      const r = await fetch(url, { headers: have ? { Range: `bytes=${have}-` } : {} });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const total = have + +(r.headers.get('content-length') || 0);
+      const out = fs.createWriteStream(dst + '.part', { flags: have && r.status === 206 ? 'a' : 'w' });
+      let got = r.status === 206 ? have : 0;
+      for await (const chunk of r.body) {
+        got += chunk.length;
+        if (!out.write(chunk)) await new Promise((ok) => out.once('drain', ok));
+        if (total) modelsDl.pct = Math.floor((got / total) * 100);
+      }
+      await new Promise((ok) => out.end(ok));
+      fs.renameSync(dst + '.part', dst);
+    } catch (err) {
+      logError('Докачка ' + what, err);
+      modelsDl = null;
+      return; // без интернета — попробуем при следующем запуске; старый редактор пока не трогаем
+    }
+  }
+  modelsDl = null;
+  // всё новое на месте — убрать старое, но только из папок atelier (их создаёт сам Arto)
+  for (const [folder, name] of edition.retired || []) {
+    if (Object.values(e).includes(name)) continue;
+    const f = path.join(config.comfy.path, 'ComfyUI', 'models', folder, 'atelier', name);
+    if (fs.existsSync(f)) { try { fs.rmSync(f); console.log('Удалил старую модель: ' + name); } catch (err) { logError('Удаление старой модели', err); } }
+  }
+}
+setTimeout(() => updateModels().catch((err) => logError('Обновление моделей', err)), 3000);
+
 // ---------- лица: найти, перерисовать крупно той же моделью-художником, вклеить с мягким краем ----------
 // (как ADetailer / FaceDetailer: на маленьком лице модели не хватает пикселей, поэтому глаза и черты «плывут»)
 async function fixFaces(buf, { src, s, prog, findOn = null }) {
@@ -616,14 +682,17 @@ async function keepTexture(orig, edited, { retexture = false, prompt = '', negat
 }
 
 // Изменить по команде (аналог Nano Banana)
-function createEdit({ instruction, sources, count, from, isTemp, preserve = true, quality = 'normal' }) {
+function createEdit({ instruction, sources, count, from, isTemp, preserve = true, quality = 'normal', cfg = null, steps = null }) {
+  // «Сила просьбы» (1…3) и «Проработка» (шаги 4…20) — только если художник менял их сам
+  cfg = Number.isFinite(+cfg) && +cfg > 0 ? Math.max(1, Math.min(3, +cfg)) : null;
+  steps = Number.isFinite(+steps) && +steps > 0 ? Math.max(4, Math.min(20, Math.round(+steps))) : null;
   if (!edition.edit) throw new Error('ИИ-редактор не настроен. Запустите install.bat ещё раз.');
   const n = Math.max(1, Math.min(4, +count || 1));
   const seed = Math.floor(Math.random() * 2 ** 31);
   const job = baseJob('edit', {
     temp: !!isTemp,
     variation: from || null,
-    prompt: instruction, rawPrompt: instruction, params: { count: n, seed, preserve, quality: quality === 'draft' ? 'draft' : 'normal' },
+    prompt: instruction, rawPrompt: instruction, params: { count: n, seed, preserve, quality: quality === 'draft' ? 'draft' : 'normal', cfg, steps },
     images: Array.from({ length: n }, (_, i) => ({ index: i, finalPrompt: instruction, seed: seed + i, file: null, error: null, liked: false })),
   });
   job.sources = sources.map((buf, i) => saveImage(`${job.id}_src${i}`, buf));
@@ -631,9 +700,21 @@ function createEdit({ instruction, sources, count, from, isTemp, preserve = true
   let names = null;
   return startJob(job, async (img, prog) => {
     if (!names) names = await Promise.all(sources.map((buf, i) => comfy.upload(buf, `${job.id}_src${i}.${sniffExt(buf)}`)));
-    const en = await editInstruction(instruction, img.index);
+    // смена техники («сделай фото», «в акварель»): описание сцены — из того, что художник просил нарисовать,
+    // и сила просьбы не ниже 2, проработка не ниже 12 — иначе Qwen-Image 2.1 почти не меняет картинку (проверено)
+    const restyle = !!restyleIntent(instruction);
+    let scene = '';
+    if (restyle && from?.jobId) {
+      const sj = findJob(from.jobId);
+      scene = sj?.subjectEn || (sj?.prompt ? await toEnglish(sj.prompt) : '');
+    }
+    const q21 = edition.edit?.kind === 'qwen21' && restyle;
+    const en = await editInstruction(instruction, img.index, scene);
     img.finalPrompt = en; // «как ИИ понял запрос» — видно в подробностях
-    const out = await runEdit({ names, firstBuf: sources[0], instruction: en, seed: img.seed, prog });
+    const out = await runEdit({
+      names, firstBuf: sources[0], instruction: en, seed: img.seed, prog,
+      cfg: q21 ? Math.max(cfg || 1, 2) : cfg, steps: q21 ? Math.max(steps || 8, 12) : steps,
+    });
     // превращение в другую технику меняет всю картинку — «сохранять фактуру» тут нельзя
     if (!(preserve && sources.length === 1) || restyleIntent(instruction)) return out;
     // ИИ-редактор рисует новое в своей манере (гладко, «наклейкой»): перерисовать изменённые места в технике оригинала
@@ -846,7 +927,7 @@ const server = http.createServer(async (req, res) => {
         guards: GUARDS.map(({ id, name, hint }) => ({ id, name, hint })),
         edition: { id: edition.id, title: edition.title, canEdit: !!edition.edit },
         version: updater.localVersion(),
-        engine: { status: comfy.status, message: comfy.message },
+        engine: { status: comfy.status, message: comfy.message, download: modelsDl },
         jobs: [...active.values()].filter((j) => !j.temp).reverse().concat(gallery),
       });
     }
@@ -868,7 +949,7 @@ const server = http.createServer(async (req, res) => {
       setTimeout(checkWindows, BYE_GRACE);
       return send(res, 200, { ok: true });
     }
-    if (p === '/api/engine') return send(res, 200, { status: comfy.status, message: comfy.message, queue: active.size });
+    if (p === '/api/engine') return send(res, 200, { status: comfy.status, message: comfy.message, queue: active.size, download: modelsDl });
     if (p === '/api/tools' && req.method === 'GET') {
       // Подключаемые инструменты редактора: каждый файл в public/tools/ — отдельный инструмент
       const files = fs.readdirSync(path.join(PUBLIC, 'tools')).filter((f) => f.endsWith('.js')).sort();
@@ -928,7 +1009,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (!sources.length) return send(res, 400, { error: 'Добавьте картинку, которую нужно изменить' });
       const from = body.sources?.[0]?.jobId ? body.sources[0] : null;
-      return send(res, 200, createEdit({ instruction, sources: sources.slice(0, 3), count: body.count, from, isTemp: !!body.temp, preserve: body.preserve !== false, quality: body.quality }));
+      return send(res, 200, createEdit({ instruction, sources: sources.slice(0, 3), count: body.count, from, isTemp: !!body.temp, preserve: body.preserve !== false, quality: body.quality, cfg: body.cfg, steps: body.steps }));
     }
     if (p === '/api/save' && req.method === 'POST') {
       // результат из редактора → новая работа в ленте

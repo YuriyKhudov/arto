@@ -389,9 +389,37 @@ function wfEditFlux2(o) {
 }
 
 // Редактирование по команде (Qwen-Image-Edit 2511 — аналог Nano Banana)
+// Qwen-Image 2.1 (turbo): редактирование словами, до 10 картинок; размер берётся от первой картинки
+function wfEditQwen21(o) {
+  const e = o.edit;
+  const w = {
+    unet: { class_type: 'UNETLoader', inputs: { unet_name: e.unet, weight_dtype: 'default' } },
+    cache: { class_type: 'QwenImage21Cache', inputs: { model: ['unet', 0], device: 'auto', dtype: 'default' } },
+    clip: { class_type: 'CLIPLoader', inputs: { clip_name: e.clip, type: 'qwen_image', device: 'default' } },
+    vae: { class_type: 'VAELoader', inputs: { vae_name: e.vae } },
+  };
+  const imgs = {};
+  o.images.forEach((name, i) => {
+    w['load' + i] = { class_type: 'LoadImage', inputs: { image: name } };
+    imgs['images.image_' + (i + 1)] = ['load' + i, 0];
+  });
+  w.enc = { class_type: 'TextEncodeQwenImage21', inputs: { clip: ['clip', 0], vae: ['vae', 0], prompt: o.instruction, negative_prompt: '', resolution: e.resolution || 1024, ...imgs } };
+  w.sample = {
+    class_type: 'KSampler',
+    inputs: {
+      model: ['cache', 0], positive: ['enc', 0], negative: ['enc', 1], latent_image: ['enc', 2],
+      seed: o.seed, steps: e.steps || 8, cfg: e.cfg || 1, sampler_name: 'euler', scheduler: 'simple', denoise: 1,
+    },
+  };
+  w.decode = { class_type: 'VAEDecode', inputs: { samples: ['sample', 0], vae: ['vae', 0] } };
+  w.save = { class_type: 'SaveImage', inputs: { images: ['decode', 0], filename_prefix: 'atelier/edit' } };
+  return w;
+}
+
 function wfEdit(o) {
   const e = o.edit;
   if (e.kind === 'flux2') return wfEditFlux2(o);
+  if (e.kind === 'qwen21') return wfEditQwen21(o);
   const w = {
     unet: { class_type: 'UNETLoader', inputs: { unet_name: e.unet, weight_dtype: e.dtype || 'default' } },
     clip: { class_type: 'CLIPLoader', inputs: { clip_name: e.clip, type: 'qwen_image' } },

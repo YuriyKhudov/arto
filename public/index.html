@@ -111,6 +111,16 @@
           <span>Вариантов</span>
           <div class="seg" id="editCountSeg"><button data-v="1">1</button><button data-v="2">2</button><button data-v="4">4</button></div>
         </div>
+        <label class="slider ed-knob" title="Насколько строго ИИ слушает просьбу. Больше — заметнее изменения, но слишком много — пересвет и искажения. Выше 1 — вдвое дольше">
+          <span>Сила просьбы</span>
+          <input type="range" id="editCfg" min="1" max="3" step="0.25" value="1">
+          <small class="scale"><em>мягко</em><b id="editCfgV"></b><em>сильно</em></small>
+        </label>
+        <label class="slider ed-knob" title="Сколько раз ИИ уточняет картинку. Больше — чище и детальнее, но дольше">
+          <span>Проработка</span>
+          <input type="range" id="editSteps" min="4" max="20" step="1" value="8">
+          <small class="scale"><em>быстро</em><b id="editStepsV"></b><em>тщательно</em></small>
+        </label>
         <span class="hint">Пишите как человеку: «сделай ночь», «убери людей», «переделай в акварель», «добавь дождь». Можно добавить до 3 картинок и попросить их совместить.</span>
       </div>
 
@@ -304,6 +314,16 @@
         <div class="ed-opt-title">✦ ИИ</div>
         <textarea id="edAiText" rows="3" placeholder="Что сделать? Например: замени на открытое окно; добавь кота; сделай фон светлее"></textarea>
         <div class="ed-varcount"><span>Вариантов</span><div class="seg" id="edAiCount"><button data-v="1" class="on">1</button><button data-v="2">2</button><button data-v="4">4</button></div></div>
+        <label class="slider ed-knob" title="Насколько строго ИИ слушает просьбу. Больше — заметнее изменения, но слишком много — пересвет и искажения. Выше 1 — вдвое дольше">
+          <span>Сила просьбы</span>
+          <input type="range" id="edAiCfg" min="1" max="3" step="0.25" value="1">
+          <small class="scale"><em>мягко</em><b id="edAiCfgV"></b><em>сильно</em></small>
+        </label>
+        <label class="slider ed-knob" title="Сколько раз ИИ уточняет картинку. Больше — чище и детальнее, но дольше">
+          <span>Проработка</span>
+          <input type="range" id="edAiSteps" min="4" max="20" step="1" value="8">
+          <small class="scale"><em>быстро</em><b id="edAiStepsV"></b><em>тщательно</em></small>
+        </label>
         <div class="ed-row">
           <button class="btn primary" id="edAiGo">Сделать</button>
           <button class="btn" id="edAiRemove" title="Убрать выделенный объект">Убрать выделенное</button>

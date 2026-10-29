@@ -642,3 +642,7 @@ body.touring .tour-block, body.touring .tour-spot, body.touring .tour-card { dis
 .cell.disliked img { opacity: .45; filter: grayscale(.6); }
 .quick .dim { opacity: .5; }
 #lbDislike.on { background: var(--bg-3); border-color: var(--danger); }
+
+/* ===== сила просьбы и проработка ===== */
+#editbar .ed-knob { width: 220px; }
+#edAiBox .ed-knob { display: block; margin-top: 8px; }

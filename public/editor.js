@@ -337,7 +337,7 @@ const Editor = (() => {
     try {
       const r = await fetch('/api/edit', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instruction, sources: [ed.img.toDataURL('image/png')], count: ed.aiCount || 1, temp: true }),
+        body: JSON.stringify({ instruction, sources: [ed.img.toDataURL('image/png')], count: ed.aiCount || 1, temp: true, ...(window.editKnobs ? window.editKnobs() : {}) }),
       });
       let job = await r.json();
       if (!r.ok) throw new Error(job.error);

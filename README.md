@@ -159,7 +159,7 @@ Arto внимательнее к типичным ошибкам: лишним �
 |---|---|---|
 | Видеокарта | NVIDIA от 6 ГБ | NVIDIA от 12 ГБ |
 | Оперативная память | от 16 ГБ | от 32 ГБ |
-| Место на диске | ~19 ГБ | ~43 ГБ |
+| Место на диске | ~19 ГБ | ~29 ГБ |
 | Возможности | все | все |
 | Картинки | быстрее, проще | крупнее и детальнее |
 
@@ -217,7 +217,7 @@ Arto легко расширять с помощью ИИ-помощников (
 Arto стоит на плечах открытых проектов и моделей:
 [ComfyUI](https://github.com/comfyanonymous/ComfyUI) ·
 [DreamShaper XL Turbo и DreamShaper 8 LCM](https://huggingface.co/Lykon) ·
-[Qwen-Image-Edit](https://huggingface.co/Qwen) и [Lightning](https://huggingface.co/lightx2v) ·
+[Qwen-Image 2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) ·
 [FLUX.2 klein](https://huggingface.co/black-forest-labs) ·
 [IP-Adapter](https://huggingface.co/h94/IP-Adapter) ·
 [ControlNet Union SDXL](https://huggingface.co/xinsir/controlnet-union-sdxl-1.0) ·

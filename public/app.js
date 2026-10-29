@@ -76,6 +76,7 @@ async function init() {
   Paints.bind();
   bindBoards();
   bindTrain();
+  bindKnobs();
   bindPrompts();
   buildControls();
   renderExamples();
@@ -99,7 +100,7 @@ async function init() {
 }
 
 async function tick() {
-  if (state.engine.status !== 'ready') {
+  if (state.engine.status !== 'ready' || state.engine.download) {
     try { state.engine = await api('/api/engine'); renderEngine(); } catch {}
   }
   const running = state.jobs.filter((j) => j.status === 'running');
@@ -125,7 +126,8 @@ function renderEngine() {
   const el = $('#engine');
   el.className = 'engine ' + e.status;
   el.title = e.message;
-  $('span', el).innerHTML = `<b>Arto ${esc(state.edition.title)} <em>${esc(state.version || '')}</em></b>${esc(e.status === 'ready' ? 'Готов к работе' : e.message)}`;
+  const dl = e.download ? `Докачиваю ${e.download.what}: ${e.download.pct}%` : '';
+  $('span', el).innerHTML = `<b>Arto ${esc(state.edition.title)} <em>${esc(state.version || '')}</em></b>${esc(dl || (e.status === 'ready' ? 'Готов к работе' : e.message))}`;
 }
 
 // ---------------- обновления ----------------
@@ -247,6 +249,33 @@ function renderSources() {
   };
   const inp = $('#srcInput');
   if (inp) inp.onchange = (e) => { const f = e.target.files[0]; if (f) addImage(f); };
+}
+
+// ---------------- «Сила просьбы» и «Проработка» для ИИ-редактора (общие для правки и редактора) ----------------
+const KNOB_DEF = { cfg: 1, steps: 8 };
+function editKnobs() {
+  let k = {};
+  try { k = JSON.parse(localStorage.getItem('arto.editKnobs') || '{}'); } catch {}
+  return { cfg: +k.cfg || KNOB_DEF.cfg, steps: +k.steps || KNOB_DEF.steps };
+}
+window.editKnobs = editKnobs;
+function bindKnobs() {
+  const label = { cfg: (v) => (v <= 1 ? 'обычно' : v < 2 ? 'заметно' : v < 2.75 ? 'сильно' : 'очень сильно'), steps: (v) => (v <= 6 ? 'быстро' : v <= 10 ? 'обычно' : v <= 14 ? 'тщательно' : 'очень тщательно') };
+  const sync = () => {
+    const k = editKnobs();
+    for (const p of ['edit', 'edAi']) {
+      const c = document.getElementById(p + 'Cfg'), s = document.getElementById(p + 'Steps');
+      if (!c) continue;
+      c.value = k.cfg; s.value = k.steps;
+      document.getElementById(p + 'CfgV').textContent = label.cfg(k.cfg);
+      document.getElementById(p + 'StepsV').textContent = label.steps(k.steps);
+    }
+  };
+  for (const p of ['edit', 'edAi']) for (const key of ['Cfg', 'Steps']) {
+    const el = document.getElementById(p + key);
+    if (el) el.oninput = () => { const k = editKnobs(); k[key.toLowerCase()] = +el.value; try { localStorage.setItem('arto.editKnobs', JSON.stringify(k)); } catch {} sync(); };
+  }
+  sync();
 }
 
 // ---------------- «Мой вкус»: ♡ и 👎 → Arto тянет к понравившемуся ----------------
@@ -484,7 +513,7 @@ async function go() {
     let job;
     if (state.mode === 'edit') {
       if (!state.sources.length) { toast('Сначала добавьте картинку', true); btn.disabled = false; return; }
-      job = await api('/api/edit', { instruction: text, count: state.editCount, quality: state.editQuality, sources: state.sources.map((s) => s.ref || s.data) });
+      job = await api('/api/edit', { instruction: text, count: state.editCount, quality: state.editQuality, sources: state.sources.map((s) => s.ref || s.data), ...editKnobs() });
     } else {
       const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
       if (lines.length > 1) {
