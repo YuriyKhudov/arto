@@ -332,6 +332,10 @@ body.editing { overflow: hidden; }
 .ed-stage { grid-area: stage; position: relative; overflow: hidden;
   background: repeating-conic-gradient(#121214 0% 25%, #0e0e10 0% 50%) 50% / 24px 24px; }
 .ed-stage canvas { position: absolute; inset: 0; touch-action: none; }
+.editor.collage-mode { grid-template-columns: minmax(0, 1fr) 300px; grid-template-areas: "top top" "stage panel"; }
+.collage-mode :is(#edTools, #edMaskInfo, #edToSketch, #edCompare),
+.collage-mode #edAiBox > :not(#edAiStatus, #edAiCancel),
+.collage-mode #edAiBox:has(#edAiStatus[hidden]) { display: none; }
 .ed-panel { grid-area: panel; border-left: 1px solid var(--line); background: var(--bg); padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
 .ed-opt-title { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 8px; }
 .ed-options { display: flex; flex-direction: column; gap: 12px; }
@@ -353,11 +357,15 @@ body.editing { overflow: hidden; }
 .ed-mask-info span { color: #f0a090; flex: 1 0 100%; }
 .ed-ai { border-top: 1px solid var(--line); padding-top: 16px; display: flex; flex-direction: column; gap: 10px; }
 .ed-ai .ed-opt-title { color: var(--accent); margin: 0; }
-.ed-ai textarea { background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px; resize: vertical; outline: 0; }
+.ed-ai textarea, .ed-options textarea { background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px; resize: vertical; outline: 0; }
+.ed-options textarea:focus { border-color: var(--accent); }
+.ed-collage-piece { display: flex; flex-direction: column; gap: 10px; }
+#collageName { overflow-wrap: anywhere; }
 .ed-ai textarea:focus { border-color: #4c4b53; }
 .ed-status { margin: 0; font-size: 12px; color: var(--accent-2); animation: pulse 1.4s infinite; }
 @media (max-width: 900px) {
   .editor { grid-template-columns: 64px 1fr; grid-template-rows: 56px 1fr auto; grid-template-areas: "top top" "tools stage" "panel panel"; }
+  .editor.collage-mode { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "stage" "panel"; }
   .ed-panel { border-left: 0; border-top: 1px solid var(--line); max-height: 40vh; }
 }
 main { overflow-x: hidden; }
@@ -532,7 +540,8 @@ body[data-page="prompts"] .view-ctl { display: none; }
 .ed-varcount { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
 .ed-variants { display: flex; flex-direction: column; gap: 8px; }
 .ed-var-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.ed-var-grid button { padding: 0; border: 2px solid transparent; border-radius: 10px; overflow: hidden; background: var(--bg-2); aspect-ratio: 1; }
+.ed-var-grid button { position: relative; padding: 0; border: 2px solid transparent; border-radius: 10px; overflow: hidden; background: var(--bg-2); aspect-ratio: 1; }
+.ed-var-grid button span { position: absolute; inset: auto 0 0; padding: 4px; background: var(--bg); font-size: 11px; }
 .ed-var-grid button img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .ed-var-grid button.on { border-color: var(--accent); }
 .ed-variants .link-btn { align-self: flex-end; }

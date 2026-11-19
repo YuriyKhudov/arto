@@ -56,8 +56,8 @@ const Editor = (() => {
     const W = box.clientWidth, H = box.clientHeight;
     ed.view.width = W * dpr; ed.view.height = H * dpr;
     ed.view.style.width = W + 'px'; ed.view.style.height = H + 'px';
-    const pad = 24;
-    ed.scale = Math.min((W - pad * 2) / ed.img.width, (H - pad * 2) / ed.img.height, 4);
+    const pad = ed.tool?.id === 'collage' ? Math.min(100, W * 0.16, H * 0.16) : 24;
+    ed.scale = Math.max(0.01, Math.min((W - pad * 2) / ed.img.width, (H - pad * 2) / ed.img.height, 4));
     ed.ox = (W - ed.img.width * ed.scale) / 2;
     ed.oy = (H - ed.img.height * ed.scale) / 2;
     redraw();
@@ -161,10 +161,10 @@ const Editor = (() => {
     return c;
   }
   // Нарисовать result поверх текущей картинки только в выделенной области (или везде, если выделения нет)
-  function applyMasked(result, label, feather) {
+  function applyMasked(result, label, feather, useMask = true) {
     const out = clone(ed.img);
     const g = out.getContext('2d');
-    if (hasMask()) {
+    if (useMask && hasMask()) {
       const layer = makeCanvas(out.width, out.height);
       const l = layer.getContext('2d');
       l.drawImage(result, 0, 0, out.width, out.height);
@@ -175,7 +175,7 @@ const Editor = (() => {
       g.clearRect(0, 0, out.width, out.height);
       g.drawImage(result, 0, 0, out.width, out.height);
     }
-    commit(out, label);
+    commit(out, label, useMask);
     // правка внесена — выделение больше не нужно (Ctrl+Z вернёт его вместе с картинкой)
     if (hasMask()) {
       ed.mask.getContext('2d').clearRect(0, 0, ed.mask.width, ed.mask.height);
@@ -208,6 +208,7 @@ const Editor = (() => {
     maskTint = null;
     fit();
     syncButtons();
+    ed.tool?.canvasRestored?.();
   }
   function undo() { if (!ed.history.length) return; ed.future.push(snapshot()); restore(ed.history.pop()); }
   function redo() { if (!ed.future.length) return; ed.history.push(snapshot()); restore(ed.future.pop()); }
@@ -265,22 +266,25 @@ const Editor = (() => {
     ed.overlay = null;
     ed.preview = null;
     ed.tool = t;
+    $('#editor').classList.toggle('collage-mode', id === 'collage');
     ed.view.style.cursor = t.cursor || 'crosshair';
     const panel = $('#edOptions');
     panel.innerHTML = `<div class="ed-opt-title">${t.name}</div>${t.hint ? `<p class="ed-hint">${t.hint}</p>` : ''}`;
     if (t.options) t.options(panel, api);
     if (t.activate) t.activate(api);
     renderToolbar();
-    redraw();
+    fit();
   }
 
-  async function open({ src, source, blank, text }) {
+  async function open({ src, source, blank, text, tool }) {
+    await toolsReady;
     const img = await loadImage(src);
     ed.img = makeCanvas(img.naturalWidth, img.naturalHeight);
     ed.img.getContext('2d').drawImage(img, 0, 0);
     ed.mask = makeCanvas(ed.img.width, ed.img.height);
     ed.history = []; ed.future = [];
     ed.original = clone(ed.img);
+    ed.initial = ed.img;
     ed.compare = null;
     document.querySelector('#edCompare').classList.remove('on');
     ed.source = source || null;
@@ -292,8 +296,9 @@ const Editor = (() => {
     renderToolbar();
     syncButtons();
     fit();
-    if (blank && tools.some((t) => t.id === 'paint')) selectTool('paint');
-    else if (!ed.tool) selectTool(tools.find((t) => !t.action)?.id);
+    if (tool && tools.some((t) => t.id === tool)) selectTool(tool);
+    else if (blank && tools.some((t) => t.id === 'paint')) selectTool('paint');
+    else if (!ed.tool || ed.tool.id === 'collage') selectTool(tools.find((t) => !t.action)?.id);
     else selectTool(ed.tool.id);
     $('#edToSketch').classList.toggle('primary', !!blank);
     $('#edAiBox').hidden = !window.ATELIER?.canEdit;
@@ -323,8 +328,10 @@ const Editor = (() => {
   }
 
   function close() {
-    if (ed.dirty && !confirm('Закрыть редактор? Несохранённые изменения пропадут.')) return;
+    if ((ed.dirty || ed.tool?.hasDraft?.()) && !confirm('Закрыть редактор? Несохранённые изменения пропадут.')) return;
     $('#editor').hidden = true;
+    ed.tool?.deactivate?.(api);
+    ed.overlay = null;
     document.body.classList.remove('editing');
   }
 
@@ -340,8 +347,9 @@ const Editor = (() => {
   function toast(msg, err) { window.toast ? window.toast(msg, err) : console.log(msg); }
 
   // ---------- ИИ-правка выделенного ----------
-  async function aiEdit(instruction) {
+  async function aiEdit(instruction, options = {}) {
     if (!instruction.trim()) return toast('Напишите, что сделать', true);
+    const inputImage = ed.img;
     const btns = document.querySelectorAll('#edAiBox button:not(#edAiCancel)');
     btns.forEach((b) => (b.disabled = true));
     const status = $('#edAiStatus');
@@ -360,7 +368,11 @@ const Editor = (() => {
     try {
       const r = await fetch('/api/edit', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instruction, sources: [ed.img.toDataURL('image/png'), ...(ed.extra || [])], from: ed.source, count: ed.aiCount || 1, temp: true, ...(window.editKnobs ? window.editKnobs() : {}) }),
+        body: JSON.stringify({
+          instruction, sources: [(options.composition ?? inputImage).toDataURL('image/png'), ...(options.references ?? ed.extra ?? [])],
+          from: options.collage ? null : ed.source, count: options.collage ? 1 : ed.aiCount || 1,
+          collage: options.collage, temp: true, ...(options.knobs ?? window.editKnobs?.()),
+        }),
       });
       let job = await r.json();
       if (!r.ok) throw new Error(job.error);
@@ -375,12 +387,25 @@ const Editor = (() => {
       }
       const res = job.images[0];
       if (job.cancelled || res.cancelled) { toast('Отменено — можно поправить текст и попробовать снова'); return; }
-      const good = job.images.filter((x) => x.file);
+      const good = job.images.filter((x) => x.file).flatMap((img) => img.firstPass
+        ? [{ ...img, file: img.firstPass, label: 'Первый проход' }, { ...img, label: 'Второй проход' }]
+        : [img]);
       if (!good.length) throw new Error(res.error || 'Не получилось');
       if (good.length === 1) {
-        applyMasked(await loadImage('/images/' + good[0].file), hasMask() ? 'Готово — изменено выделенное' : 'Готово', 10);
+        const result = await loadImage('/images/' + good[0].file);
+        if (options.collage) {
+          if ($('#editor').hidden || ed.img !== inputImage) return toast('Картинка изменилась, пока ИИ рисовал. Результат не применён.');
+          const out = makeCanvas(inputImage.width, inputImage.height);
+          out.getContext('2d').drawImage(result, 0, 0, out.width, out.height);
+          commit(out, 'Коллаж перерисован', false);
+          return out;
+        } else {
+          if (options.wholeImage && ($('#editor').hidden || ed.img !== inputImage)) return toast('Картинка изменилась, пока ИИ работал. Результат не применён.');
+          applyMasked(result, good[0].warning || (!options.wholeImage && hasMask() ? 'Готово — изменено выделенное' : 'Готово'), 10, !options.wholeImage);
+        }
       } else {
-        showVariants(good, hasMask());
+        if (options.wholeImage && ($('#editor').hidden || ed.img !== inputImage)) return toast('Картинка изменилась, пока ИИ работал. Результат не применён.');
+        showVariants(good, !options.wholeImage && hasMask(), !options.wholeImage);
       }
     } catch (e) {
       toast(e.message, true);
@@ -393,12 +418,12 @@ const Editor = (() => {
   }
 
   // Несколько вариантов: миниатюры, клик — применить (повторный клик по другому — заменить)
-  function showVariants(list, masked) {
+  function showVariants(list, masked, useMask) {
     const box = $('#edAiVariants');
     let applied = -1;
     box.hidden = false;
     box.innerHTML = '<div class="ed-opt-title">Выберите вариант</div><div class="ed-var-grid">'
-      + list.map((v, i) => `<button data-i="${i}" title="${(v.finalPrompt || '').replace(/"/g, '&quot;')}"><img src="/images/${v.file}" alt=""></button>`).join('')
+      + list.map((v, i) => `<button data-i="${i}" title="${(v.label || v.finalPrompt || '').replace(/"/g, '&quot;')}"><img src="/images/${v.file}" alt="">${v.label ? `<span>${v.label}</span>` : ''}</button>`).join('')
       + '</div><button class="link-btn" id="edVarClose">Готово</button>';
     box.onclick = async (e) => {
       if (e.target.id === 'edVarClose') { box.hidden = true; return; }
@@ -407,7 +432,8 @@ const Editor = (() => {
       if (applied >= 0) undo(); // убрать прошлый вариант, вернуть исходник и выделение
       applied = +b.dataset.i;
       box.querySelectorAll('[data-i]').forEach((x) => x.classList.toggle('on', x === b));
-      applyMasked(await loadImage('/images/' + list[applied].file), masked ? 'Вариант применён к выделенному' : 'Вариант применён', 10);
+      const variant = list[applied];
+      applyMasked(await loadImage('/images/' + variant.file), variant.warning || (masked ? 'Вариант применён к выделенному' : 'Вариант применён'), 10, useMask);
     };
     box.querySelector('[data-i="0"]').click();
   }
@@ -434,6 +460,9 @@ const Editor = (() => {
   function bindUI() {
     ed.view = $('#edCanvas');
     bindPointer();
+    ed.view.addEventListener('contextmenu', (e) => {
+      if (ed.compare == null) ed.tool?.context?.(toImage(e), e, api);
+    });
     $('#edTools').onclick = (e) => { const b = e.target.closest('[data-id]'); if (b) selectTool(b.dataset.id); };
     $('#edUndo').onclick = undo;
     $('#edRedo').onclick = redo;
@@ -455,6 +484,14 @@ const Editor = (() => {
     $('#edClearMask').onclick = clearMask;
     $('#edInvertMask').onclick = invertMask;
     $('#edAiGo').onclick = () => aiEdit($('#edAiText').value);
+    $('#edAiAnatomy').onclick = () => aiEdit(
+      'Correct visible human anatomy throughout the image. Fix malformed hands and fingers, feet and toes, unnatural limb proportions, and incorrectly bent joints. Preserve the pose, foreshortening, facial identity, composition, lighting and visual style. Keep clothing and objects in place. Leave correct anatomy intact and keep anything hidden or outside the frame hidden.',
+      { references: [], wholeImage: true },
+    );
+    $('#edAiPhoto').onclick = () => aiEdit(
+      'Transform the supplied image into a photograph of the same scene. Keep the same person, facial features, expression, pose, clothing, silhouette, framing and arrangement of objects. Preserve the direction of light and the overall palette. Replace painted surfaces with plausible photographic materials across the whole frame: natural skin, individual hair strands, fabric folds and a coherent softly lit background. Render the existing forms with soft photographic transitions.',
+      { references: [], wholeImage: true },
+    );
     $('#edAiCount').onclick = (e) => {
       const b = e.target.closest('[data-v]');
       if (!b) return;
@@ -469,10 +506,12 @@ const Editor = (() => {
     window.addEventListener('resize', () => { if (!$('#editor').hidden) fit(); });
     document.addEventListener('keydown', (e) => {
       if ($('#editor').hidden || /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
+      if (ed.compare == null && ed.tool?.keyDown?.(e)) { e.preventDefault(); return; }
       if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
       if (e.ctrlKey && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
-      if (e.ctrlKey && e.key.toLowerCase() === 'd') { e.preventDefault(); clearMask(); return; }
       if (e.key === 'Escape') return close();
+      if (ed.tool?.id === 'collage') return;
+      if (e.ctrlKey && e.key.toLowerCase() === 'd') { e.preventDefault(); clearMask(); return; }
       const t = tools.find((x) => x.key && x.key === e.key.toLowerCase());
       if (t && !e.ctrlKey) selectTool(t.id);
     });
@@ -490,8 +529,22 @@ const Editor = (() => {
     hasMask, clearMask, invertMask, maskChanged,
     maskDone() { updateMaskFlag(); maskChanged(); },
     toast,
+    get hasCanvasChanges() { return ed.img !== ed.initial; },
+    resetCanvas() {
+      if (ed.img !== ed.initial) commit(ed.initial, '', false);
+    },
+    get canRunAi() { return !$('#edAiGo').disabled; },
+    redrawCollage(instruction, references, composition, knobs) {
+      return aiEdit(instruction, { references, composition, knobs, collage: true });
+    },
   };
 
   const reselect = () => ed.tool && selectTool(ed.tool.id);
-  return { register, loadTools, open, close, bindUI, reselect, api };
+  function addImages(files) {
+    if ($('#editor').hidden || !ed.tool?.addImages || !files.length) return false;
+    ed.tool.addImages(files);
+    return true;
+  }
+  let toolsReady;
+  return { register, loadTools() { return toolsReady ??= loadTools(); }, open, close, bindUI, reselect, addImages, api };
 })();

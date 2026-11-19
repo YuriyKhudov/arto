@@ -17,7 +17,6 @@ process.on('unhandledRejection', (e) => logError('Ошибка (async)', e));
 
 const { STYLES, RETIRED, GUARDS, buildPrompts, parseInlineParams, dimsFor } = require('./prompt');
 const { Comfy, wfGenerate, wfUpscale, wfEdit, wfOutpaint, wfOutpaintUnion, wfTrainLora } = require('./comfy');
-const { toEnglish, preload: preloadTranslator } = require('./translate');
 // библиотека картинок нужна только для сохранения фактуры — если её нет, остальное работает
 const texture = () => require('./texture');
 const facefix = () => require('./facefix');
@@ -51,7 +50,6 @@ const edition = { id: config.edition, ...config.editions[config.edition] };
 if (process.env.ARTO_COMFY_URL) config.comfy.url = process.env.ARTO_COMFY_URL; // только для проверок разработчика
 const comfy = new Comfy(config.comfy);
 comfy.ensureRunning();
-preloadTranslator();
 
 // ---------- хранилище ----------
 function readJSON(file, fallback) {
@@ -176,11 +174,12 @@ function startJob(job, runOne) {
           if (comfy.status === 'starting') img.progress = { stage: 'starting', pct: 0, eta: null };
           for (let t = 0; comfy.status === 'starting' && t < 300 && !job.cancelled; t++) await new Promise((r) => setTimeout(r, 1000));
           if (comfy.status !== 'ready') throw new Error(comfy.message);
-          img.file = saveImage(`${job.id}_${img.index}`, await runOne(img, prog));
+          const result = await runOne(img, prog);
+          if (!job.cancelled) img.file = saveImage(`${job.id}_${img.index}`, result);
           prog.done();
         } catch (e) {
           img.error = e.message;
-          console.error(`[${job.id}#${img.index}]`, e.message);
+          console.error(`[${job.id}#${img.index}]`, e.message, e.cause ?? '');
         }
         if (job.cancelled && !img.file) { img.error = 'Отменено'; img.cancelled = true; }
         delete img.progress;
@@ -255,15 +254,14 @@ function tasteRefs(subjectEn, style) {
 
 async function createImagine({ prompt, params, ref, variation, styles = [], control = null }) {
   const inline = parseInlineParams(prompt);
-  const p = { ...params, ...inline.params };
+  const p = { style: 'raw', stylize: 0, ...params, ...inline.params };
   const count = Math.max(1, Math.min(32, Math.round(+p.count) || 4));
   const seed = p.seed !== '' && p.seed != null && Number.isFinite(+p.seed) ? +p.seed : Math.floor(Math.random() * 2 ** 31);
-  const subjectEn = await toEnglish(inline.text);
-  const noEn = await toEnglish(p.no);
+  const subject = inline.text;
   const mlEntry = p.myLora && myLoras.find((x) => x.id === p.myLora.id);
   // своя манера сама задаёт технику, свет и фактуру: «эстетический слой» и техника Arto её забивают (проверено)
   if (mlEntry) styles = [];
-  const built = buildPrompts({ subject: (mlEntry ? mlEntry.trigger + ' style artwork, ' : '') + subjectEn, style: mlEntry ? 'raw' : p.style, stylize: mlEntry ? 0 : +p.stylize, chaos: mlEntry ? 0 : +p.chaos, weird: mlEntry ? 0 : +p.weird, no: noEn, seed, count, guards: p.guards });
+  const built = buildPrompts({ subject: (mlEntry ? mlEntry.trigger + ' style artwork, ' : '') + subject, style: mlEntry ? 'raw' : p.style, stylize: mlEntry ? 0 : +p.stylize, chaos: mlEntry ? 0 : +p.chaos, weird: mlEntry ? 0 : +p.weird, no: p.no, seed, count, guards: p.guards });
   // Качество: черновик — меньше и быстрее; высокое — больше шагов и сразу увеличение ×2
   const q = ['draft', 'normal', 'high'].includes(p.quality) ? p.quality : 'normal';
   const g0 = edition.generate;
@@ -283,7 +281,7 @@ async function createImagine({ prompt, params, ref, variation, styles = [], cont
     params: { ...p, seed, count, width, height, quality: q },
     usedReference: !!refBuf,
     mannerName: mlEntry ? mlEntry.name : undefined,
-    subjectEn,
+    subjectEn: subject,
     styleFiles: [],
     negative: built.negative,
     images: built.prompts.map((fp, i) => ({ index: i, finalPrompt: fp, seed: seed + i, file: null, error: null, liked: false })),
@@ -302,7 +300,7 @@ async function createImagine({ prompt, params, ref, variation, styles = [], cont
   // ползунок 0…2 → реальная сила: выше ~1.2 стиль с картинок начинает тащить содержимое образца и «перемазывать» технику (проверено)
   const sw = sw0 * (edition.styleRef?.weightScale ?? 1);
   // «Мой вкус»: понравившиеся работы — мягкие образцы (с образцами художника — ещё мягче), «не та» — образец «не так»
-  const taste = p.taste && edition.styleRef && !mlEntry ? tasteRefs(subjectEn, p.style) : null;
+  const taste = p.taste && edition.styleRef && !mlEntry ? tasteRefs(subject, p.style) : null;
   if (taste?.liked.length) { job.tasteFiles = taste.liked; job.tasteNeg = taste.disliked; }
 
   let refName = null;
@@ -349,49 +347,6 @@ function pngSize(buf) {
 }
 
 // Запустить ИИ-редактор на загруженных картинках. Pro — Qwen-Image-Edit, Lite — FLUX.2 klein.
-// Понятная модели инструкция: английский + «остальное не трогай»; варианты отличаются силой изменения
-const VARIETY = ['', ' Make the change clearly visible.', ' Keep the change subtle and natural.', ' Make the change bold and expressive.'];
-// «Преврати в другую технику» (фото, акварель…): машинный перевод путает такие просьбы
-// («сделай из картины фото» → «сфотографируй картину»), поэтому даём редактору точную формулировку.
-// Ищем глагол превращения и технику в пределах нескольких слов — опечатки в остальном не мешают.
-const KEEP = ' Keep the same people, faces, pose, objects, framing and composition.';
-// Qwen-Image 2.1 бережёт исходник и «пускает» новую технику, только когда видит описание сцены и <image1> (проверено)
-const PHOTO_Q21 = (scene) => `Photorealistic photograph of the same scene as <image1>${scene ? ': ' + scene : ''}. Shot on a professional camera, 85mm lens, real skin texture, real fabric, realistic lighting, sharp focus. Replace all paint, pastel, charcoal and drawing texture with real photographic detail.`;
-const RESTYLE = [
-  [/фото|фотограф|как в жизни|фотореал/, 'Turn this artwork into a realistic photograph: real skin with natural texture, real hair and fabric, natural camera lighting, shallow depth of field, no brush strokes, no paint or drawing texture.', PHOTO_Q21],
-  [/акварел/, 'Repaint the whole image as a loose watercolor painting on watercolor paper: transparent washes, soft bleeding edges, white paper showing through.'],
-  [/масл|маслян/, 'Repaint the whole image as an oil painting on canvas with visible thick brushstrokes.'],
-  [/карандаш|графит/, 'Redraw the whole image as a graphite pencil drawing on white paper: pencil lines and hatching, no color.'],
-  [/угл[её]м|уголь|угольн/, 'Redraw the whole image as a charcoal drawing on textured paper: bold charcoal strokes, rich blacks, no color.'],
-  [/туш[ьи]|пером/, 'Redraw the whole image as a pen and black ink drawing on white paper: ink lines and hatching, no color.'],
-  [/пастел/, 'Repaint the whole image as a soft pastel drawing on toned paper with chalky strokes.'],
-  [/аниме|мульт/, 'Redraw the whole image in anime illustration style with clean lines and cel shading.'],
-];
-const RESTYLE_VERB = /(^|[\s,])(сделай|сделать|преврати|превратить|переделай|переделать|переведи|перерисуй|перерисовать|измени|поменяй|как|в виде|в стиле)\S*(\s+\S+){0,4}?\s+/;
-function restyleIntent(text, scene = '') {
-  const t = ' ' + String(text).toLowerCase().replace(/ё/g, 'е') + ' ';
-  for (const [re, en, q21] of RESTYLE) {
-    const m = new RegExp(RESTYLE_VERB.source + '(в\\s+|во\\s+)?(' + re.source + ')').exec(t);
-    if (!m) continue;
-    if (edition.edit?.kind !== 'qwen21') return en + KEEP;
-    // Qwen-Image 2.1: картинка — <image1>, сцена — словами
-    return (q21 ? q21(scene) : en.replace('the whole image', `the whole image <image1>${scene ? ' (' + scene + ')' : ''}`)) + KEEP;
-  }
-  return null;
-}
-
-async function editInstruction(text, variant = 0, scene = '') {
-  if (text === FIX_INSTRUCTION) return text;
-  const restyle = restyleIntent(text, scene);
-  if (restyle) return restyle;
-  // Qwen-Image 2.1 понимает русский сам — отдаём просьбу художника как есть, как в ComfyUI, без перевода.
-  // Одна приписка: без неё короткие просьбы («убери кота») модель часто не выполняет (проверено: 0 из 3 → 3 из 3)
-  if (edition.edit?.kind === 'qwen21') return `${text.trim().replace(/[.!\s]+$/, '')}. Остальное оставь без изменений.`;
-  let en = (await toEnglish(text)).trim().replace(/[.!\s]+$/, '');
-  if (!en) en = text;
-  return `Edit the image: ${en}. Keep everything that is not mentioned unchanged.${VARIETY[variant % VARIETY.length]}`;
-}
-
 async function runEdit({ names, firstBuf, instruction, seed, prog, inpaint = null, cfg = null, steps = null }) {
   if (modelsDl) throw new Error(`Arto докачивает ${modelsDl.what} — ${modelsDl.pct}%. Это один раз, подождите немного.`);
   const e = { ...edition.edit, ...(cfg ? { cfg } : {}), ...(steps ? { steps } : {}) };
@@ -687,8 +642,8 @@ async function keepTexture(orig, edited, { retexture = false, prompt = '', negat
 }
 
 // Изменить по команде (аналог Nano Banana)
-function createEdit({ instruction, sources, count, from, isTemp, preserve = true, quality = 'normal', cfg = null, steps = null }) {
-  // «Сила просьбы» (1…3) и «Проработка» (шаги 4…20) — только если художник менял их сам
+function createEdit({ instruction, sources, count, from, isTemp, preserve = false, collage = false, quality = 'normal', cfg = null, steps = null }) {
+  // Если CFG и Steps не переданы, используются настройки модели.
   cfg = Number.isFinite(+cfg) && +cfg > 0 ? Math.max(1, Math.min(3, +cfg)) : null;
   steps = Number.isFinite(+steps) && +steps > 0 ? Math.max(4, Math.min(20, Math.round(+steps))) : null;
   if (!edition.edit) throw new Error('ИИ-редактор не настроен. Запустите install.bat ещё раз.');
@@ -705,23 +660,8 @@ function createEdit({ instruction, sources, count, from, isTemp, preserve = true
   let names = null;
   return startJob(job, async (img, prog) => {
     if (!names) names = await Promise.all(sources.map((buf, i) => comfy.upload(buf, `${job.id}_src${i}.${sniffExt(buf)}`)));
-    // смена техники («сделай фото», «в акварель»): описание сцены — из того, что художник просил нарисовать,
-    // и сила просьбы не ниже 2, проработка не ниже 12 — иначе Qwen-Image 2.1 почти не меняет картинку (проверено)
-    const restyle = !!restyleIntent(instruction);
-    let scene = '';
-    if (restyle && from?.jobId) {
-      const sj = findJob(from.jobId);
-      scene = sj?.subjectEn || (sj?.prompt ? await toEnglish(sj.prompt) : '');
-    }
-    const q21 = edition.edit?.kind === 'qwen21' && restyle;
-    const en = await editInstruction(instruction, img.index, scene);
-    img.finalPrompt = en; // «как ИИ понял запрос» — видно в подробностях
-    const out = await runEdit({
-      names, firstBuf: sources[0], instruction: en, seed: img.seed, prog,
-      cfg: q21 ? Math.max(cfg || 1, 2) : cfg, steps: q21 ? Math.max(steps || 8, 12) : steps,
-    });
-    // превращение в другую технику меняет всю картинку — «сохранять фактуру» тут нельзя
-    if (!(preserve && sources.length === 1) || restyleIntent(instruction)) return out;
+    const out = await runEdit({ names, firstBuf: sources[0], instruction, seed: img.seed, prog, cfg, steps });
+    if (collage || !preserve || sources.length !== 1) return out;
     // ИИ-редактор рисует новое в своей манере (гладко, «наклейкой»): перерисовать изменённые места в технике оригинала
     // в подсказке — только техника: описание оригинала («платье в узор») вернуло бы старое на изменённое место
     const src = from?.jobId ? findJob(from.jobId) : null;
@@ -764,7 +704,7 @@ function serveFile(res, base, rel) {
 }
 
 const findJob = (id) => active.get(id) || temp.get(id) || gallery.find((j) => j.id === id);
-const jobFiles = (job) => [...job.images.map((i) => i.file), ...(job.sources || []), ...(job.styleFiles || []), job.before, job.control?.file].filter(Boolean);
+const jobFiles = (job) => [...job.images.flatMap((i) => [i.file, i.firstPass]), ...(job.sources || []), ...(job.styleFiles || []), job.before, job.control?.file].filter(Boolean);
 const fileInUse = (file) => gallery.some((j) => jobFiles(j).includes(file)) || [...active.values()].some((j) => jobFiles(j).includes(file));
 
 // Образцы стиля: data URI, картинка из ленты {jobId,index} или сохранённый стиль {styleId}
@@ -931,7 +871,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, {
         styles: STYLES.map(({ id, name, hint }) => ({ id, name, hint })),
         guards: GUARDS.map(({ id, name, hint }) => ({ id, name, hint })),
-        edition: { id: edition.id, title: edition.title, canEdit: !!edition.edit },
+        edition: { id: edition.id, title: edition.title, canEdit: !!edition.edit, editDefaults: edition.edit ? { cfg: edition.edit.cfg, steps: edition.edit.steps } : null },
         version: updater.localVersion(),
         engine: { status: comfy.status, message: comfy.message, download: modelsDl },
         jobs: [...active.values()].filter((j) => !j.temp).reverse().concat(gallery),
@@ -1016,7 +956,7 @@ const server = http.createServer(async (req, res) => {
       if (!sources.length) return send(res, 400, { error: 'Добавьте картинку, которую нужно изменить' });
       // from — откуда открыта картинка в редакторе: техника оригинала и что на нём изображено
       const from = body.sources?.[0]?.jobId ? body.sources[0] : body.from?.jobId && findJob(body.from.jobId) ? { jobId: body.from.jobId, index: +body.from.index || 0 } : null;
-      return send(res, 200, createEdit({ instruction, sources: sources.slice(0, 3), count: body.count, from, isTemp: !!body.temp, preserve: body.preserve !== false, quality: body.quality, cfg: body.cfg, steps: body.steps }));
+      return send(res, 200, createEdit({ instruction, sources: sources.slice(0, 3), count: body.count, from, isTemp: !!body.temp, preserve: body.preserve === true, collage: body.collage === true, quality: body.quality, cfg: body.cfg, steps: body.steps }));
     }
     if (p === '/api/save' && req.method === 'POST') {
       // результат из редактора → новая работа в ленте

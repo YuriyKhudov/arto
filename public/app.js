@@ -10,7 +10,7 @@ const FORMATS = [
   { ar: '3:2', name: 'Альбом' },
   { ar: '16:9', name: 'Широкий' },
 ];
-const DEFAULT_PARAMS = { quality: 'normal', style: 'graphite', ar: '1:1', count: 4, stylize: 250, chaos: 0, weird: 0, iw: 1, no: '', sw: 1, guards: [], taste: false };
+const DEFAULT_PARAMS = { quality: 'normal', style: 'raw', ar: '1:1', count: 4, stylize: 0, chaos: 0, weird: 0, iw: 1, no: '', sw: 1, guards: [], taste: false };
 const EXAMPLES = [
   'старый маяк в шторм, одинокая фигура на берегу',
   'портрет пожилой балерины в гримёрке',
@@ -23,7 +23,7 @@ const KIND = { upscale: 'Увеличено ×2', edit: 'Изменение', st
 
 const state = {
   styles: [], edition: {}, engine: {}, jobs: [],
-  params: load('atelier.params', DEFAULT_PARAMS),
+  params: loadParams(),
   ref: null,
   control: null, // набросок: { url, data | jobId+index | file, mode, strength }
   styleRefs: [], myStyles: [], // образцы стиля: { url, data | jobId+index | file, w }
@@ -34,7 +34,17 @@ const state = {
 function load(key, def) {
   try { return { ...def, ...JSON.parse(localStorage.getItem(key) || '{}') }; } catch { return { ...def }; }
 }
-function saveParams() { try { localStorage.setItem('atelier.params', JSON.stringify(state.params)); } catch {} }
+function loadParams() {
+  const key = 'atelier.params.literal';
+  try {
+    if (localStorage.getItem(key) === null) {
+      const { ar, count, quality } = load('atelier.params', DEFAULT_PARAMS);
+      localStorage.setItem(key, JSON.stringify({ ar, count, quality }));
+    }
+  } catch {}
+  return load(key, DEFAULT_PARAMS);
+}
+function saveParams() { try { localStorage.setItem('atelier.params.literal', JSON.stringify(state.params)); } catch {} }
 
 async function api(path, body, method) {
   const res = await fetch(path, {
@@ -64,7 +74,7 @@ async function init() {
   state.version = s.version;
   state.engine = s.engine;
   state.jobs = s.jobs;
-  window.ATELIER = { canEdit: state.edition.canEdit };
+  window.ATELIER = { canEdit: state.edition.canEdit, edition: state.edition.id, editDefaults: state.edition.editDefaults };
   window.toast = toast;
   window.onEditorSaved = (job) => { state.jobs.unshift(job); renderFeed(); };
   Editor.bindUI();
@@ -184,7 +194,7 @@ const LEVELS = {
 
 function syncControls() {
   const p = state.params;
-  if (state.styles.length && !state.styles.some((st) => st.id === p.style)) p.style = { gouache: 'oil' }[p.style] || 'graphite'; // техника убрана
+  if (state.styles.length && !state.styles.some((st) => st.id === p.style)) p.style = { gouache: 'oil' }[p.style] || 'raw'; // техника убрана
   $('#style').value = p.style;
   $$('#formatSeg button').forEach((b) => b.classList.toggle('on', b.dataset.ar === p.ar));
   $$('#countSeg button').forEach((b) => b.classList.toggle('on', +b.dataset.v === +p.count));
@@ -220,29 +230,33 @@ function renderRef() {
   $('#iwInline').oninput = (e) => { state.params.iw = +e.target.value; saveParams(); e.target.nextElementSibling.textContent = LEVELS.iw(state.params.iw); $('#iw').value = state.params.iw; };
 }
 
-// ---------------- «Сила просьбы» и «Проработка» для ИИ-редактора (общие для правки и редактора) ----------------
-const KNOB_DEF = { cfg: 1, steps: 8 };
+// ---------------- CFG и Steps для ИИ-редактора ----------------
 function editKnobs() {
   let k = {};
   try { k = JSON.parse(localStorage.getItem('arto.editKnobs') || '{}'); } catch {}
-  return { cfg: +k.cfg || KNOB_DEF.cfg, steps: +k.steps || KNOB_DEF.steps };
+  const defaults = state.edition.editDefaults || { cfg: 1, steps: state.edition.id === 'lite' ? 4 : 8 };
+  return { cfg: +k?.cfg || defaults.cfg, steps: +k?.steps || defaults.steps };
 }
 window.editKnobs = editKnobs;
 function bindKnobs() {
-  const label = { cfg: (v) => (v <= 1 ? 'обычно' : v < 2 ? 'заметно' : v < 2.75 ? 'сильно' : 'очень сильно'), steps: (v) => (v <= 6 ? 'быстро' : v <= 10 ? 'обычно' : v <= 14 ? 'тщательно' : 'очень тщательно') };
   const sync = () => {
     const k = editKnobs();
     for (const p of ['edAi']) {
       const c = document.getElementById(p + 'Cfg'), s = document.getElementById(p + 'Steps');
       if (!c) continue;
       c.value = k.cfg; s.value = k.steps;
-      document.getElementById(p + 'CfgV').textContent = label.cfg(k.cfg);
-      document.getElementById(p + 'StepsV').textContent = label.steps(k.steps);
+      document.getElementById(p + 'CfgV').textContent = c.value;
+      document.getElementById(p + 'StepsV').textContent = s.value;
     }
   };
   for (const p of ['edAi']) for (const key of ['Cfg', 'Steps']) {
     const el = document.getElementById(p + key);
-    if (el) el.oninput = () => { const k = editKnobs(); k[key.toLowerCase()] = +el.value; try { localStorage.setItem('arto.editKnobs', JSON.stringify(k)); } catch {} sync(); };
+    if (el) el.oninput = () => {
+      const k = load('arto.editKnobs', {});
+      k[key.toLowerCase()] = +el.value;
+      try { localStorage.setItem('arto.editKnobs', JSON.stringify(k)); } catch {}
+      sync();
+    };
   }
   sync();
 }
@@ -1211,15 +1225,17 @@ function bindEvents() {
     $('#vSketch').textContent = LEVELS.sk(v);
   });
   // чистый лист в редакторе — набросать композицию кистью
-  $('#sketchDraw').onclick = () => {
+  function openBlankCanvas(title, tool) {
     const ar = (state.params.ar || '1:1').split(':').map(Number);
     const k = 1024 / Math.max(ar[0], ar[1]);
     const c = document.createElement('canvas');
     c.width = Math.round(ar[0] * k); c.height = Math.round(ar[1] * k);
     const g = c.getContext('2d'); g.fillStyle = '#ffffff'; g.fillRect(0, 0, c.width, c.height);
-    $('#edTitle').value = 'Набросок';
-    Editor.open({ src: c.toDataURL('image/png'), blank: true });
-  };
+    $('#edTitle').value = title;
+    return Editor.open({ src: c.toDataURL('image/png'), blank: true, tool });
+  }
+  $('#sketchDraw').onclick = () => openBlankCanvas('Набросок', 'paint');
+  $('#openCollage').onclick = () => openBlankCanvas('Коллаж', 'collage');
   window.onEditorToSketch = (dataUrl) => {
     state.sketchMode = 'sketch';
     state.control = null;
@@ -1276,7 +1292,10 @@ function bindEvents() {
   $('#refInput').onchange = (e) => { const f = e.target.files[0]; if (f) addImage(f); e.target.value = ''; };
   document.addEventListener('paste', (e) => {
     const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith('image/'));
-    if (item && $('#editor').hidden) { e.preventDefault(); addImage(item.getAsFile()); }
+    const file = item?.getAsFile();
+    if (!file) return;
+    if (Editor.addImages([file])) { e.preventDefault(); return; }
+    if ($('#editor').hidden) { e.preventDefault(); addImage(file); }
   });
   let depth = 0;
   window.addEventListener('dragenter', (e) => { if (e.dataTransfer.types.includes('Files')) { depth++; $('#dropOverlay').hidden = false; } });
@@ -1286,7 +1305,9 @@ function bindEvents() {
     e.preventDefault();
     depth = 0;
     $('#dropOverlay').hidden = true;
-    const f = [...e.dataTransfer.files].find((x) => x.type.startsWith('image/'));
+    const files = [...e.dataTransfer.files].filter((x) => x.type.startsWith('image/'));
+    if (Editor.addImages(files)) return;
+    const f = files[0];
     if (!f) return;
     if (!$('#editor').hidden) Editor.open({ src: URL.createObjectURL(f) });
     else addImage(f);

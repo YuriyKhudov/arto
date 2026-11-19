@@ -24,6 +24,19 @@ class Comfy {
     } catch { return false; }
   }
 
+  async request(route, options, attempts = 1) {
+    for (let i = 1; ; i++) {
+      try {
+        return await fetch(this.url + route, options);
+      } catch (error) {
+        if (i >= attempts || !(error instanceof TypeError)) {
+          throw new Error('Связь с двигателем прервалась. Проверьте, что ComfyUI запущен, и повторите.', { cause: error });
+        }
+        await sleep(400 * i);
+      }
+    }
+  }
+
   // Если ComfyUI не запущен — запускаем его скрыто, без окна и без браузера.
   async ensureRunning() {
     if (await this.ping()) return this.setReady();
@@ -109,7 +122,7 @@ class Comfy {
   }
 
   async listModels(folder) {
-    const r = await fetch(`${this.url}/models/${folder}`);
+    const r = await this.request(`/models/${folder}`, undefined, 3);
     return r.ok ? r.json() : [];
   }
 
@@ -126,7 +139,7 @@ class Comfy {
     fd.append('image', new Blob([buf]), name);
     fd.append('subfolder', subfolder);
     fd.append('overwrite', 'true');
-    const r = await fetch(this.url + '/upload/image', { method: 'POST', body: fd });
+    const r = await this.request('/upload/image', { method: 'POST', body: fd }, 3);
     if (!r.ok) throw new Error('Не удалось передать картинку двигателю');
     const j = await r.json();
     return j.subfolder ? `${j.subfolder}/${j.name}` : j.name;
@@ -138,7 +151,7 @@ class Comfy {
   }
 
   async runInner(workflow, onProgress, timeoutMs, expectImage = true) {
-    const r = await fetch(this.url + '/prompt', {
+    const r = await this.request('/prompt', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt: workflow, client_id: CLIENT_ID }),
     });
@@ -153,7 +166,7 @@ class Comfy {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
       await sleep(700);
-      const h = await (await fetch(`${this.url}/history/${id}`)).json().catch(() => ({}));
+      const h = await (await this.request(`/history/${id}`, undefined, 3)).json().catch(() => ({}));
       const item = h[id];
       if (!item) continue;
       if (item.status?.status_str === 'error') {
@@ -165,7 +178,8 @@ class Comfy {
         const img = out.images?.[0];
         if (!img) continue;
         const q = new URLSearchParams({ filename: img.filename, subfolder: img.subfolder || '', type: img.type || 'output' });
-        const res = await fetch(`${this.url}/view?${q}`);
+        const res = await this.request(`/view?${q}`, undefined, 3);
+        if (!res.ok) throw new Error('Не удалось получить готовую картинку от двигателя');
         return Buffer.from(await res.arrayBuffer());
       }
       if (!expectImage) return null;
