@@ -329,13 +329,24 @@ body.editing { overflow: hidden; }
 .ed-tool svg { width: 22px; height: 22px; }
 .ed-tool:hover { background: var(--bg-2); color: var(--text); }
 .ed-tool.on { background: var(--bg-3); color: var(--accent-2); }
-.ed-stage { grid-area: stage; position: relative; overflow: hidden;
+.ed-stage { grid-area: stage; display: flex; flex-direction: column; min-height: 0; overflow: hidden;
   background: repeating-conic-gradient(#121214 0% 25%, #0e0e10 0% 50%) 50% / 24px 24px; }
-.ed-stage canvas { position: absolute; inset: 0; touch-action: none; }
+.ed-viewport { flex: 1; min-height: 0; position: relative; overflow: hidden; }
+.ed-viewport canvas { position: absolute; inset: 0; touch-action: none; }
+.ed-ai-progress { display: flex; flex: none; justify-content: center; align-items: center; gap: 10px;
+  padding: 6px 12px; background: var(--bg); border-bottom: 1px solid var(--line); }
+.ed-ai-progress .btn { flex-shrink: 0; padding: 4px 8px; }
+.ed-compare-actions { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; width: max-content; max-width: calc(100% - 16px); }
+.ed-compare-actions .btn { background: var(--bg); }
+.ed-compare-actions .btn[aria-pressed="true"] { border-color: var(--accent); }
+#edAiLoraSlots select {
+  width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+  font: inherit; color: var(--text); background: var(--bg-2); color-scheme: dark;
+}
+#edAiLoraSlots option { color: var(--text); background: var(--bg-2); }
+#edAiLoraSlots .ed-field { margin-top: 8px; }
 .editor.collage-mode { grid-template-columns: minmax(0, 1fr) 300px; grid-template-areas: "top top" "stage panel"; }
-.collage-mode :is(#edTools, #edMaskInfo, #edToSketch, #edCompare),
-.collage-mode #edAiBox > :not(#edAiStatus, #edAiCancel),
-.collage-mode #edAiBox:has(#edAiStatus[hidden]) { display: none; }
+.collage-mode :is(#edTools, #edMaskInfo, #edToSketch, #edCompare, #edAiBox) { display: none; }
 .ed-panel { grid-area: panel; border-left: 1px solid var(--line); background: var(--bg); padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
 .ed-opt-title { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 8px; }
 .ed-options { display: flex; flex-direction: column; gap: 12px; }
@@ -362,7 +373,7 @@ body.editing { overflow: hidden; }
 .ed-collage-piece { display: flex; flex-direction: column; gap: 10px; }
 #collageName { overflow-wrap: anywhere; }
 .ed-ai textarea:focus { border-color: #4c4b53; }
-.ed-status { margin: 0; font-size: 12px; color: var(--accent-2); animation: pulse 1.4s infinite; }
+.ed-status { margin: 0; font-size: 13px; color: var(--accent-2); }
 @media (max-width: 900px) {
   .editor { grid-template-columns: 64px 1fr; grid-template-rows: 56px 1fr auto; grid-template-areas: "top top" "tools stage" "panel panel"; }
   .editor.collage-mode { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "stage" "panel"; }
@@ -402,7 +413,6 @@ main { overflow-x: hidden; }
 /* ===== отмена ===== */
 .btn.cancel { border-color: rgba(226,118,107,.5); color: #f0a49b; }
 .btn.cancel:hover { background: rgba(226,118,107,.12); border-color: var(--danger); color: #fff; }
-#edAiCancel { align-self: flex-start; }
 
 /* ===== качество и количество ===== */
 .grid.many { grid-template-columns: repeat(4, 1fr); }
@@ -539,6 +549,8 @@ body[data-page="prompts"] .view-ctl { display: none; }
 /* ===== несколько вариантов в редакторе ===== */
 .ed-varcount { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
 .ed-variants { display: flex; flex-direction: column; gap: 8px; }
+.ed-var-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ed-var-heading .btn.on { border-color: var(--accent); color: var(--accent-2); }
 .ed-var-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .ed-var-grid button { position: relative; padding: 0; border: 2px solid transparent; border-radius: 10px; overflow: hidden; background: var(--bg-2); aspect-ratio: 1; }
 .ed-var-grid button span { position: absolute; inset: auto 0 0; padding: 4px; background: var(--bg); font-size: 11px; }

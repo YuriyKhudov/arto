@@ -98,14 +98,12 @@ $HF = "https://huggingface.co"
 $up = Need "upscale_models" "4x_NMKD-Siax_200k.pth" "$HF/uwg/upscaler/resolve/main/ESRGAN/4x_NMKD-Siax_200k.pth" "увеличитель, бережный к штриху (64 МБ)"
 if ($Edition -eq "pro") {
   $ckpt = Need "checkpoints" "DreamShaperXL_Turbo_v2_1.safetensors" "$HF/Lykon/dreamshaper-xl-v2-turbo/resolve/main/DreamShaperXL_Turbo_v2_1.safetensors" "художник DreamShaper XL (6,5 ГБ)"
-  # ИИ-редактор: Qwen-Image 2.1 turbo (быстрый, бережёт стиль и лица)
-  $null = Need "diffusion_models" "qwen_image_2.1_turbo_int8_convrot.safetensors" "$HF/Comfy-Org/Qwen-Image-2.1/resolve/main/diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors" "ИИ-редактор Qwen-Image 2.1 (6,8 ГБ)"
-  $null = Need "text_encoders" "qwen3vl_8b_int8_convrot.safetensors" "$HF/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors" "понимание текста для редактора (8,7 ГБ)"
-  $null = Need "vae" "qwen_image_2.1_vae_bf16.safetensors" "$HF/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors" "VAE редактора (0,6 ГБ)"
-  # прежний редактор, скачанный Arto раньше, больше не нужен — убираем (только из папок atelier)
-  foreach ($old in @("diffusion_models\atelier\qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning_comfyui_4steps_v1.0.safetensors", "text_encoders\atelier\qwen_2.5_vl_7b_fp8_scaled.safetensors", "vae\atelier\qwen_image_vae.safetensors")) {
-    if (Test-Path "$M\$old") { Remove-Item "$M\$old" -Force; Say "   удалил старую модель: $(Split-Path $old -Leaf)" "DarkGray" }
-  }
+  # Qwen-Image-Edit 2511 с двумя LoRA
+  $null = Need "loras" "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-fp32.safetensors" "$HF/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-fp32.safetensors" "ускорение редактора Qwen"
+  $null = Need "loras" "edit_0928_lora_step40000.safetensors" "$HF/DiffSynth-Studio/Qwen-Image-Edit-F2P/resolve/main/edit_0928_lora_step40000.safetensors" "дополнение для фотореализма Qwen"
+  $null = Need "diffusion_models" "qwen_image_edit_2511_bf16.safetensors" "$HF/Comfy-Org/Qwen-Image-Edit/resolve/main/split_files/diffusion_models/qwen_image_edit_2511_bf16.safetensors" "ИИ-редактор Qwen-Image-Edit 2511 (40,9 ГБ)"
+  $null = Need "text_encoders" "qwen_2.5_vl_7b.safetensors" "$HF/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b.safetensors" "понимание текста для редактора"
+  $null = Need "vae" "qwen_image_vae.safetensors" "$HF/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors" "VAE редактора"
   $null = Need "ipadapter" "ip-adapter-plus_sdxl_vit-h.safetensors" "$HF/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors" "стиль с картинок для SDXL (0,8 ГБ)"
   $null = Need "controlnet" "diffusion_pytorch_model_promax.safetensors" "$HF/xinsir/controlnet-union-sdxl-1.0/resolve/main/diffusion_pytorch_model_promax.safetensors" "рисование по наброску и раскрытие кадра (2,5 ГБ)"
 } else {

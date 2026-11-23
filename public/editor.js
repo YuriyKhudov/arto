@@ -72,6 +72,15 @@ const Editor = (() => {
     const g = ed.view.getContext('2d');
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, ed.view.width, ed.view.height);
+    if (ed.compare != null && ed.comparePair) {
+      const pair = comparisonLayout();
+      const width = ed.view.width / dpr, height = ed.view.height / dpr;
+      const scale = Math.max(0.01, Math.min((width - 32) / pair.width, (height - 88) / pair.height));
+      g.translate((width - pair.width * scale) / 2, 54 + (height - 72 - pair.height * scale) / 2);
+      g.scale(scale, scale);
+      drawComparison(g, pair);
+      return;
+    }
     g.save();
     g.translate(ed.ox, ed.oy);
     g.scale(ed.scale, ed.scale);
@@ -185,6 +194,7 @@ const Editor = (() => {
   }
 
   // ---------- история ----------
+  let syncVariants = null;
   function snapshot() { return { img: ed.img, mask: clone(ed.mask) }; }
   function commit(newImg, label, keepMask = true) {
     ed.history.push(snapshot());
@@ -215,6 +225,7 @@ const Editor = (() => {
   function syncButtons() {
     $('#edUndo').disabled = !ed.history.length;
     $('#edRedo').disabled = !ed.future.length;
+    syncVariants?.();
   }
 
   // ---------- указатель ----------
@@ -226,6 +237,7 @@ const Editor = (() => {
     let down = false;
     ed.view.addEventListener('pointerdown', (e) => {
       if (ed.compare != null) {
+        if (ed.comparePair) return;
         down = 'cmp';
         ed.view.setPointerCapture(e.pointerId);
         ed.compare = Math.max(0, Math.min(1, toImage(e).x / ed.img.width));
@@ -285,7 +297,12 @@ const Editor = (() => {
     ed.history = []; ed.future = [];
     ed.original = clone(ed.img);
     ed.initial = ed.img;
+    dismissVariants();
     ed.compare = null;
+    ed.comparePair = false;
+    $('#edCompareActions').hidden = true;
+    $('#edComparePair').setAttribute('aria-pressed', 'false');
+    $('#edComparePair').textContent = 'Показать рядом';
     document.querySelector('#edCompare').classList.remove('on');
     ed.source = source || null;
     ed.dirty = false;
@@ -329,6 +346,7 @@ const Editor = (() => {
 
   function close() {
     if ((ed.dirty || ed.tool?.hasDraft?.()) && !confirm('Закрыть редактор? Несохранённые изменения пропадут.')) return;
+    dismissVariants();
     $('#editor').hidden = true;
     ed.tool?.deactivate?.(api);
     ed.overlay = null;
@@ -349,14 +367,21 @@ const Editor = (() => {
   // ---------- ИИ-правка выделенного ----------
   async function aiEdit(instruction, options = {}) {
     if (!instruction.trim()) return toast('Напишите, что сделать', true);
+    const seedInput = $('#edAiSeed');
+    if (!options.collage && !seedInput.checkValidity()) return seedInput.reportValidity();
+    const seed = !options.collage && seedInput.value !== '' ? seedInput.valueAsNumber : undefined;
+    if (seed !== undefined && !window.ATELIER?.editSeed) {
+      return toast('Чтобы применить Seed, закройте Arto и снова запустите start.bat.', true);
+    }
     const inputImage = ed.img;
-    const btns = document.querySelectorAll('#edAiBox button:not(#edAiCancel)');
+    const btns = document.querySelectorAll('#edAiBox button');
     btns.forEach((b) => (b.disabled = true));
+    const progress = $('#edAiProgress');
     const status = $('#edAiStatus');
-    status.hidden = false;
-    $('#edAiVariants').hidden = true;
+    dismissVariants();
     const cancelBtn = $('#edAiCancel');
-    cancelBtn.hidden = false;
+    cancelBtn.disabled = true;
+    progress.hidden = false;
     let jobId = null;
     cancelBtn.onclick = async () => {
       if (!jobId) return;
@@ -364,24 +389,27 @@ const Editor = (() => {
       status.textContent = 'Отменяю…';
       await fetch('/api/jobs/' + jobId + '/cancel', { method: 'POST' });
     };
-    status.textContent = 'ИИ работает… (первый раз после рисования — до пары минут)';
+    status.textContent = 'ИИ готовится…';
     try {
       const r = await fetch('/api/edit', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           instruction, sources: [(options.composition ?? inputImage).toDataURL('image/png'), ...(options.references ?? ed.extra ?? [])],
           from: options.collage ? null : ed.source, count: options.collage ? 1 : ed.aiCount || 1,
-          collage: options.collage, temp: true, ...(options.knobs ?? window.editKnobs?.()),
+          collage: options.collage, loras: options.collage ? undefined : editLoras, seed, temp: true,
+          ...(options.knobs ?? window.editKnobs?.()),
         }),
       });
       let job = await r.json();
       if (!r.ok) throw new Error(job.error);
       jobId = job.id;
+      cancelBtn.disabled = false;
       while (job.status === 'running') {
         await new Promise((ok) => setTimeout(ok, 1200));
         job = await (await fetch('/api/jobs/' + job.id)).json();
         const doneN = job.images.filter((x) => x.file || x.error).length;
-        const p = job.images.find((x) => x.progress)?.progress;
+        const p = job.images.find((x) => !x.file && !x.error && x.progress)?.progress;
+        if (cancelBtn.disabled) continue;
         if (p && job.images.length > 1) status.textContent = `Вариант ${doneN + 1} из ${job.images.length} — ${p.pct || 0}%`;
         else if (p) status.textContent = `ИИ: ${({ queued: 'в очереди', loading: 'готовлюсь', model: 'загружаю модель', drawing: 'рисую' })[p.stage] || 'работаю'} — ${p.pct || 0}%${p.slow ? ' · до минуты' : p.eta ? ' · ~' + p.eta + ' с' : ''}`;
       }
@@ -400,40 +428,82 @@ const Editor = (() => {
           commit(out, 'Коллаж перерисован', false);
           return out;
         } else {
-          if (options.wholeImage && ($('#editor').hidden || ed.img !== inputImage)) return toast('Картинка изменилась, пока ИИ работал. Результат не применён.');
+          if ($('#editor').hidden || ed.img !== inputImage) return toast('Картинка изменилась, пока ИИ работал. Результат не применён.');
           applyMasked(result, good[0].warning || (!options.wholeImage && hasMask() ? 'Готово — изменено выделенное' : 'Готово'), 10, !options.wholeImage);
         }
       } else {
-        if (options.wholeImage && ($('#editor').hidden || ed.img !== inputImage)) return toast('Картинка изменилась, пока ИИ работал. Результат не применён.');
-        showVariants(good, !options.wholeImage && hasMask(), !options.wholeImage);
+        if ($('#editor').hidden || ed.img !== inputImage) return toast('Картинка изменилась, пока ИИ работал. Результат не применён.');
+        showVariants(good, !options.wholeImage);
       }
     } catch (e) {
       toast(e.message, true);
     } finally {
-      status.hidden = true;
-      cancelBtn.hidden = true;
-      cancelBtn.disabled = false;
+      progress.hidden = true;
       btns.forEach((b) => (b.disabled = false));
     }
   }
 
-  // Несколько вариантов: миниатюры, клик — применить (повторный клик по другому — заменить)
-  function showVariants(list, masked, useMask) {
+  function dismissVariants() {
+    syncVariants = null;
     const box = $('#edAiVariants');
-    let applied = -1;
-    box.hidden = false;
-    box.innerHTML = '<div class="ed-opt-title">Выберите вариант</div><div class="ed-var-grid">'
-      + list.map((v, i) => `<button data-i="${i}" title="${(v.label || v.finalPrompt || '').replace(/"/g, '&quot;')}"><img src="/images/${v.file}" alt="">${v.label ? `<span>${v.label}</span>` : ''}</button>`).join('')
-      + '</div><button class="link-btn" id="edVarClose">Готово</button>';
+    box.hidden = true;
+    box.onclick = null;
+  }
+
+  // Каждый вариант применяется к одному исходнику, вместе с его выделением.
+  function showVariants(list, useMask) {
+    const box = $('#edAiVariants');
+    const base = ed.img;
+    const applied = new WeakMap();
+    let request = 0;
+    box.innerHTML = '<div class="ed-var-heading"><div class="ed-opt-title">Выберите вариант</div>'
+      + '<button type="button" class="btn" data-i="original">Исходник</button></div><div class="ed-var-grid">'
+      + list.map((v, i) => '<button type="button" data-i="' + i + '" aria-label="Вариант ' + (i + 1)
+        + '"><img src="/images/' + v.file + '" alt="">' + (v.label ? '<span>' + v.label + '</span>' : '') + '</button>').join('')
+      + '</div><p class="ed-hint" role="status" hidden></p><button type="button" class="link-btn" id="edVarClose">Готово</button>';
+    const buttons = box.querySelectorAll('[data-i]');
+    const status = box.querySelector('[role="status"]');
+    const showStatus = (message) => {
+      status.textContent = message || '';
+      status.hidden = !message;
+    };
+    const sync = () => {
+      const index = applied.get(ed.img);
+      const selected = ed.img === base ? 'original' : String(index);
+      box.hidden = ed.img !== base && (index === undefined || ed.history.at(-1)?.img !== base);
+      buttons.forEach((button) => {
+        const active = button.dataset.i === selected;
+        button.classList.toggle('on', active);
+        button.setAttribute('aria-pressed', String(active));
+      });
+      showStatus(list[index]?.warning);
+    };
+    syncVariants = sync;
+    sync();
     box.onclick = async (e) => {
-      if (e.target.id === 'edVarClose') { box.hidden = true; return; }
-      const b = e.target.closest('[data-i]');
-      if (!b) return;
-      if (applied >= 0) undo(); // убрать прошлый вариант, вернуть исходник и выделение
-      applied = +b.dataset.i;
-      box.querySelectorAll('[data-i]').forEach((x) => x.classList.toggle('on', x === b));
-      const variant = list[applied];
-      applyMasked(await loadImage('/images/' + variant.file), variant.warning || (masked ? 'Вариант применён к выделенному' : 'Вариант применён'), 10, useMask);
+      if (e.target.id === 'edVarClose') { dismissVariants(); return; }
+      const button = e.target.closest('[data-i]');
+      if (!button || box.hidden) return;
+      const current = ed.img;
+      const previous = applied.get(current);
+      const latest = ++request;
+      if (button.dataset.i === 'original') {
+        if (previous !== undefined) undo();
+        return;
+      }
+      const index = Number(button.dataset.i);
+      if (previous === index) return;
+      try {
+        const result = await loadImage('/images/' + list[index].file);
+        // За время загрузки пользователь мог выбрать другой вариант, отменить правку или открыть другую работу.
+        if (latest !== request || syncVariants !== sync || ed.img !== current || box.hidden) return;
+        if (previous !== undefined) undo();
+        applyMasked(result, null, 10, useMask);
+        applied.set(ed.img, index);
+        sync();
+      } catch {
+        if (latest === request && syncVariants === sync && ed.img === current) showStatus('Не удалось открыть вариант.');
+      }
     };
     box.querySelector('[data-i="0"]').click();
   }
@@ -450,11 +520,80 @@ const Editor = (() => {
     if (window.onEditorSaved) window.onEditorSaved(job);
   }
 
-  function download() {
+  function comparisonLayout() {
+    const imageHeight = Math.max(ed.original.height, ed.img.height);
+    const widths = [ed.original, ed.img].map((img) => Math.max(1, Math.round(img.width * imageHeight / img.height)));
+    const pad = Math.max(8, Math.round(imageHeight * 0.02));
+    const font = Math.max(14, Math.round(imageHeight * 0.028));
+    return { imageHeight, widths, pad, font, width: widths[0] + widths[1] + 3 * pad, height: imageHeight + 3 * pad + font };
+  }
+
+  function drawComparison(g, pair) {
+    const { imageHeight, widths, pad, font, width, height } = pair;
+    g.fillStyle = '#fff';
+    g.fillRect(0, 0, width, height);
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(ed.original, pad, pad, widths[0], imageHeight);
+    g.drawImage(ed.img, 2 * pad + widths[0], pad, widths[1], imageHeight);
+    g.fillStyle = '#222';
+    g.font = `600 ${font}px Segoe UI, sans-serif`;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    const y = imageHeight + 2 * pad + font / 2;
+    g.fillText('Было', pad + widths[0] / 2, y);
+    g.fillText('Стало', 2 * pad + widths[0] + widths[1] / 2, y);
+  }
+
+  function download(canvas, filename) {
     const a = document.createElement('a');
-    a.href = ed.img.toDataURL('image/png');
-    a.download = 'atelier_edit.png';
+    a.href = canvas.toDataURL('image/png');
+    a.download = filename;
     a.click();
+  }
+
+  let editLoras;
+  async function loadEditLoras() {
+    const slots = $('#edAiLoraSlots');
+    const status = $('#edAiLoraStatus');
+    status.textContent = 'Ищу установленные LoRA…';
+    try {
+      const response = await fetch('/api/edit/loras');
+      if (response.status === 404) {
+        status.textContent = 'Чтобы открыть выбор LoRA, закройте Arto и снова запустите start.bat.';
+        return;
+      }
+      if (!response.ok) throw new Error();
+      const { files, defaults } = await response.json();
+      const current = editLoras ?? defaults;
+      slots.replaceChildren();
+      status.textContent = files.length ? 'Выбирайте LoRA для модели редактора.' : 'Установленные LoRA не найдены.';
+      if (!files.length) return;
+      for (let i = 0; i < 2; i++) {
+        const row = document.createElement('div');
+        row.innerHTML = `
+          <label class="ed-field">LoRA ${i + 1}<select></select></label>
+          <label class="ed-field"><span>Вес <b></b></span><input type="range" min="-2" max="2" step="0.05"></label>`;
+        const select = row.querySelector('select');
+        const weight = row.querySelector('input');
+        const value = row.querySelector('b');
+        select.add(new Option('Нет', ''));
+        for (const name of files) select.add(new Option(name.split(/[\\/]/).pop(), name));
+        select.value = current[i]?.name || '';
+        if (select.selectedIndex < 0) select.value = '';
+        weight.value = current[i]?.strength ?? 1;
+        value.textContent = Number(weight.value).toFixed(2);
+        weight.disabled = !select.value;
+        select.onchange = weight.oninput = () => {
+          editLoras ??= Array.from({ length: 2 }, (_, index) => ({ ...(defaults[index] || { name: '', strength: 1 }) }));
+          editLoras[i] = { name: select.value, strength: Number(weight.value) };
+          weight.disabled = !select.value;
+          value.textContent = Number(weight.value).toFixed(2);
+        };
+        slots.append(row);
+      }
+    } catch {
+      status.textContent = 'Не удалось загрузить список LoRA. Откройте раздел ещё раз.';
+    }
   }
 
   function bindUI() {
@@ -467,7 +606,13 @@ const Editor = (() => {
     $('#edUndo').onclick = undo;
     $('#edRedo').onclick = redo;
     $('#edSave').onclick = save;
-    $('#edDownload').onclick = download;
+    $('#edDownload').onclick = () => download(ed.img, 'atelier_edit.png');
+    $('#edDownloadPair').onclick = () => {
+      const pair = comparisonLayout();
+      const canvas = makeCanvas(pair.width, pair.height);
+      drawComparison(canvas.getContext('2d'), pair);
+      download(canvas, 'arto_before_after.png');
+    };
     $('#edToSketch').onclick = () => {
       if (!window.onEditorToSketch) return;
       window.onEditorToSketch(ed.img.toDataURL('image/png'));
@@ -476,14 +621,23 @@ const Editor = (() => {
     };
     $('#edCompare').onclick = () => {
       ed.compare = ed.compare == null ? 0.5 : null;
+      $('#edCompareActions').hidden = ed.compare == null;
       $('#edCompare').classList.toggle('on', ed.compare != null);
-      ed.view.style.cursor = ed.compare != null ? 'ew-resize' : ed.tool?.cursor || 'crosshair';
+      ed.view.style.cursor = ed.compare == null ? ed.tool?.cursor || 'crosshair' : ed.comparePair ? 'default' : 'ew-resize';
+      redraw();
+    };
+    $('#edComparePair').onclick = (e) => {
+      ed.comparePair = !ed.comparePair;
+      e.currentTarget.setAttribute('aria-pressed', String(ed.comparePair));
+      e.currentTarget.textContent = ed.comparePair ? 'Показать с линией' : 'Показать рядом';
+      ed.view.style.cursor = ed.comparePair ? 'default' : 'ew-resize';
       redraw();
     };
     $('#edClose').onclick = close;
     $('#edClearMask').onclick = clearMask;
     $('#edInvertMask').onclick = invertMask;
     $('#edAiGo').onclick = () => aiEdit($('#edAiText').value);
+    $('#edAiLoras').ontoggle = (e) => { if (e.currentTarget.open) loadEditLoras(); };
     $('#edAiAnatomy').onclick = () => aiEdit(
       'Correct visible human anatomy throughout the image. Fix malformed hands and fingers, feet and toes, unnatural limb proportions, and incorrectly bent joints. Preserve the pose, foreshortening, facial identity, composition, lighting and visual style. Keep clothing and objects in place. Leave correct anatomy intact and keep anything hidden or outside the frame hidden.',
       { references: [], wholeImage: true },
@@ -503,6 +657,8 @@ const Editor = (() => {
       aiEdit('Remove the objects in the marked area completely and seamlessly fill it with the surrounding background, keeping the same drawing style.');
     };
     $('#edAiText').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#edAiGo').click(); } });
+    const stage = $('#edStage');
+    new ResizeObserver(() => { if (!$('#editor').hidden) fit(); }).observe(stage);
     window.addEventListener('resize', () => { if (!$('#editor').hidden) fit(); });
     document.addEventListener('keydown', (e) => {
       if ($('#editor').hidden || /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;

@@ -45,12 +45,20 @@ class Comfy {
     if (!fs.existsSync(py)) return this.setError(`Не найден ${py}`);
     const port = new URL(this.url).port || '8188';
     const logFile = fs.openSync(path.join(__dirname, 'data', 'engine.log'), 'w');
-    this.proc = spawn(py, ['-s', 'ComfyUI/main.py', '--windows-standalone-build', '--disable-auto-launch', '--port', port, ...this.args], {
-      cwd: this.path, windowsHide: true, stdio: ['ignore', logFile, logFile],
+    try {
+      this.proc = spawn(py, ['-s', 'ComfyUI/main.py', '--windows-standalone-build', '--disable-auto-launch', '--port', port, ...this.args], {
+        cwd: this.path, detached: true, windowsHide: true, stdio: ['ignore', logFile, logFile],
+      });
+    } finally {
+      fs.closeSync(logFile);
+    }
+    this.proc.unref();
+    this.proc.on('error', (error) => {
+      this.proc = null;
+      this.setError('Не удалось запустить ComfyUI: ' + error.message);
     });
     this.proc.on('exit', (code) => {
       this.proc = null;
-      if (this.stopping) return;
       if (this.status !== 'ready') this.setError(`Двигатель остановился (код ${code}). Подробности: data/engine.log`);
       else { this.status = 'starting'; this.message = 'Двигатель перезапускается…'; this.ensureRunning(); }
     });
@@ -84,32 +92,6 @@ class Comfy {
     ws.onclose = () => { this.ws = null; setTimeout(() => this.connectWs(), 2000); };
   }
   setError(m) { this.status = 'error'; this.message = m; }
-
-  stop() { if (this.proc) this.proc.kill(); }
-
-  // Полное выключение: гасим двигатель, даже если он остался от прошлого запуска Arto
-  // (тогда this.proc пустой, а ComfyUI всё равно держит порт и видеопамять).
-  shutdown() {
-    this.stopping = true;
-    const { spawnSync } = require('child_process');
-    const pids = new Set();
-    if (this.proc) pids.add(this.proc.pid);
-    try {
-      const port = new URL(this.url).port || '8188';
-      const py = path.join(this.path, 'python_embeded', 'python.exe').toLowerCase();
-      const ps = `Get-NetTCPConnection -State Listen -LocalPort ${port} -ErrorAction SilentlyContinue | ForEach-Object { Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)" } | ForEach-Object { "$($_.ProcessId)|$($_.ExecutablePath)|$($_.CommandLine)" }`;
-      const out = spawnSync('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf8', windowsHide: true, timeout: 15000 }).stdout || '';
-      for (const line of out.split(/\r?\n/)) {
-        const [pid, exe = '', cmd = ''] = line.split('|');
-        // только «наш» ComfyUI, чужие программы на этом порту не трогаем
-        if (+pid && exe.toLowerCase() === py && cmd.includes('main.py')) pids.add(+pid);
-      }
-    } catch {}
-    for (const pid of pids) spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true });
-    this.proc = null;
-    this.status = 'error';
-    this.message = 'Двигатель выключен';
-  }
 
   // Выгрузить модели из видеопамяти (перед обучением)
   async free() {
@@ -366,6 +348,24 @@ function wfUpscale(o) {
 
 // Редактирование по команде, лёгкая модель (FLUX.2 klein 4B — для версии Lite).
 // Размер результата (o.width × o.height) считает сервер — шаги планировщика от него зависят.
+function editModelWithLoras(w, loras) {
+  let model = ['unet', 0];
+  for (const [index, { name, strength }] of loras.entries()) {
+    const key = 'editLora' + index;
+    w[key] = { class_type: 'LoraLoaderModelOnly', inputs: { model, lora_name: name, strength_model: strength } };
+    model = [key, 0];
+  }
+  return model;
+}
+
+function defaultEditLoras(edit) {
+  return [
+    { name: edit?.lora, strength: 1 },
+    { name: edit?.lightning, strength: 0.9 },
+    { name: edit?.photoLora, strength: 1 },
+  ].filter(({ name }) => name);
+}
+
 function wfEditFlux2(o) {
   const e = o.edit;
   const w = {
@@ -383,7 +383,7 @@ function wfEditFlux2(o) {
     cond = ['ref' + i, 0];
   });
   w.neg = { class_type: 'ConditioningZeroOut', inputs: { conditioning: cond } };
-  w.guider = { class_type: 'CFGGuider', inputs: { model: ['unet', 0], positive: cond, negative: ['neg', 0], cfg: e.cfg || 1 } };
+  w.guider = { class_type: 'CFGGuider', inputs: { model: editModelWithLoras(w, e.loras || []), positive: cond, negative: ['neg', 0], cfg: e.cfg || 1 } };
   w.noise = { class_type: 'RandomNoise', inputs: { noise_seed: o.seed } };
   w.sampler = { class_type: 'KSamplerSelect', inputs: { sampler_name: 'euler' } };
   w.sigmas = { class_type: 'Flux2Scheduler', inputs: { steps: e.steps || 4, width: o.width, height: o.height } };
@@ -408,10 +408,10 @@ function wfEditQwen21(o) {
   const e = o.edit;
   const w = {
     unet: { class_type: 'UNETLoader', inputs: { unet_name: e.unet, weight_dtype: 'default' } },
-    cache: { class_type: 'QwenImage21Cache', inputs: { model: ['unet', 0], device: 'auto', dtype: 'default' } },
     clip: { class_type: 'CLIPLoader', inputs: { clip_name: e.clip, type: 'qwen_image', device: 'default' } },
     vae: { class_type: 'VAELoader', inputs: { vae_name: e.vae } },
   };
+  w.cache = { class_type: 'QwenImage21Cache', inputs: { model: editModelWithLoras(w, e.loras || []), device: 'auto', dtype: 'default' } };
   const imgs = {};
   o.images.forEach((name, i) => {
     w['load' + i] = { class_type: 'LoadImage', inputs: { image: name } };
@@ -439,18 +439,16 @@ function wfEdit(o) {
     clip: { class_type: 'CLIPLoader', inputs: { clip_name: e.clip, type: 'qwen_image' } },
     vae: { class_type: 'VAELoader', inputs: { vae_name: e.vae } },
   };
-  let model = ['unet', 0];
-  if (e.lora) {
-    w.lora = { class_type: 'LoraLoaderModelOnly', inputs: { model, lora_name: e.lora, strength_model: 1 } };
-    model = ['lora', 0];
-  }
-  w.shift = { class_type: 'ModelSamplingAuraFlow', inputs: { model, shift: 3.1 } };
-  w.norm = { class_type: 'CFGNorm', inputs: { model: ['shift', 0], strength: 1 } };
+  const model = editModelWithLoras(w, e.loras ?? defaultEditLoras(e));
+  w.shift = { class_type: 'ModelSamplingAuraFlow', inputs: { model, shift: e.shift ?? 3.1 } };
+  w.norm = { class_type: 'CFGNorm', inputs: { model: ['shift', 0], strength: 1, pre_cfg: false } };
   const imgs = {};
   o.images.forEach((name, i) => {
     w['load' + i] = { class_type: 'LoadImage', inputs: { image: name } };
-    w['px' + i] = { class_type: 'ImageScaleToTotalPixels', inputs: { image: ['load' + i, 0], upscale_method: 'lanczos', megapixels: e.megapixels || 1, resolution_steps: 8 } };
-    imgs['image' + (i + 1)] = ['px' + i, 0];
+    w['px' + i] = e.kind === 'qwen2511'
+      ? { class_type: 'FluxKontextImageScale', inputs: { image: ['load' + i, 0] } }
+      : { class_type: 'ImageScaleToTotalPixels', inputs: { image: ['load' + i, 0], upscale_method: 'lanczos', megapixels: e.megapixels || 1, resolution_steps: 8 } };
+    imgs['image' + (i + 1)] = [e.kind === 'qwen2511' ? 'load' + i : 'px' + i, 0];
   });
   w.pos = { class_type: 'TextEncodeQwenImageEditPlus', inputs: { clip: ['clip', 0], prompt: o.instruction, vae: ['vae', 0], ...imgs } };
   w.neg = { class_type: 'TextEncodeQwenImageEditPlus', inputs: { clip: ['clip', 0], prompt: '', vae: ['vae', 0], ...imgs } };
@@ -461,7 +459,7 @@ function wfEdit(o) {
     class_type: 'KSampler',
     inputs: {
       model: ['norm', 0], positive: ['posR', 0], negative: ['negR', 0], latent_image: ['enc', 0],
-      seed: o.seed, steps: e.steps || 4, cfg: e.cfg || 1, sampler_name: 'euler', scheduler: 'simple', denoise: 1,
+      seed: o.seed, steps: e.steps || 4, cfg: e.cfg || 1, sampler_name: e.sampler || 'euler', scheduler: e.scheduler || 'simple', denoise: 1,
     },
   };
   w.decode = { class_type: 'VAEDecode', inputs: { samples: ['sample', 0], vae: ['vae', 0] } };
@@ -469,4 +467,4 @@ function wfEdit(o) {
   return w;
 }
 
-module.exports = { Comfy, wfGenerate, wfUpscale, wfEdit, wfOutpaint, wfOutpaintUnion, wfTrainLora };
+module.exports = { Comfy, wfGenerate, wfUpscale, wfEdit, defaultEditLoras, wfOutpaint, wfOutpaintUnion, wfTrainLora };

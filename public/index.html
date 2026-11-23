@@ -292,7 +292,19 @@
       </div>
     </header>
     <nav class="ed-tools" id="edTools"></nav>
-    <div class="ed-stage" id="edStage"><canvas id="edCanvas"></canvas></div>
+    <div class="ed-stage">
+      <div class="ed-ai-progress" id="edAiProgress" hidden>
+        <p class="ed-status" id="edAiStatus" role="status"></p>
+        <button class="btn cancel" id="edAiCancel" type="button">■ Отменить</button>
+      </div>
+      <div class="ed-viewport" id="edStage">
+        <canvas id="edCanvas"></canvas>
+        <div class="ed-compare-actions" id="edCompareActions" hidden>
+          <button class="btn" id="edComparePair" type="button" aria-pressed="false">Показать рядом</button>
+          <button class="btn" id="edDownloadPair" type="button">Скачать было / стало</button>
+        </div>
+      </div>
+    </div>
     <aside class="ed-panel">
       <div class="ed-mask-info" id="edMaskInfo" hidden>
         <span>Есть выделение</span>
@@ -307,12 +319,21 @@
         <div class="ed-varcount"><span>Вариантов</span><div class="seg" id="edAiCount"><button data-v="1" class="on">1</button><button data-v="2">2</button><button data-v="4">4</button></div></div>
         <label class="slider ed-knob" title="Насколько строго ИИ слушает просьбу. Больше — заметнее изменения, но слишком много — пересвет и искажения. Выше 1 — вдвое дольше">
           <span>CFG <b id="edAiCfgV">1</b></span>
-          <input type="range" id="edAiCfg" min="1" max="3" step="0.25" value="1">
+          <input type="range" id="edAiCfg" min="1" max="10" step="0.25" value="1">
         </label>
         <label class="slider ed-knob" title="Сколько раз ИИ уточняет картинку. Больше — чище и детальнее, но дольше">
           <span>Steps <b id="edAiStepsV">8</b></span>
-          <input type="range" id="edAiSteps" min="4" max="20" step="1" value="8">
+          <input type="range" id="edAiSteps" min="4" max="80" step="1" value="8">
         </label>
+        <label class="ed-field">
+          <span>Seed</span>
+          <input id="edAiSeed" type="number" min="0" max="9007199254740988" step="1" placeholder="Случайный">
+        </label>
+        <details id="edAiLoras" class="ed-knob">
+          <summary>LoRA</summary>
+          <p class="ed-hint" id="edAiLoraStatus">Выберите LoRA, совместимые с моделью редактора.</p>
+          <div id="edAiLoraSlots"></div>
+        </details>
         <div class="ed-row">
           <button class="btn primary" id="edAiGo">Сделать</button>
           <button class="btn" id="edAiRemove" title="Убрать выделенный объект">Убрать выделенное</button>
@@ -322,9 +343,7 @@
           <button class="btn" id="edAiPhoto" title="Превратить исходную картинку в фото, сохранив сцену">Сделать фото</button>
         </div>
         <p class="ed-hint">Пишите как человеку. Если что-то выделено — ИИ поменяет только эту часть, без выделения — всю картинку. «+ картинка» — добавить ещё одну, чтобы совместить: «надень на неё платье со второй картинки».</p>
-        <p class="ed-status" id="edAiStatus" hidden></p>
         <div class="ed-variants" id="edAiVariants" hidden></div>
-        <button class="btn cancel" id="edAiCancel" hidden>■ Отменить</button>
       </div>
     </aside>
   </div>

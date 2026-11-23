@@ -74,7 +74,7 @@ async function init() {
   state.version = s.version;
   state.engine = s.engine;
   state.jobs = s.jobs;
-  window.ATELIER = { canEdit: state.edition.canEdit, edition: state.edition.id, editDefaults: state.edition.editDefaults };
+  window.ATELIER = { canEdit: state.edition.canEdit, edition: state.edition.id, editKind: state.edition.editKind, editDefaults: state.edition.editDefaults, editSeed: state.edition.editSeed === true };
   window.toast = toast;
   window.onEditorSaved = (job) => { state.jobs.unshift(job); renderFeed(); };
   Editor.bindUI();
@@ -231,9 +231,13 @@ function renderRef() {
 }
 
 // ---------------- CFG и Steps для ИИ-редактора ----------------
+function editKnobKey() {
+  return 'arto.editKnobs.' + (state.edition.editKnobProfile || state.edition.editKind || state.edition.id);
+}
+
 function editKnobs() {
   let k = {};
-  try { k = JSON.parse(localStorage.getItem('arto.editKnobs') || '{}'); } catch {}
+  try { k = JSON.parse(localStorage.getItem(editKnobKey()) || '{}'); } catch {}
   const defaults = state.edition.editDefaults || { cfg: 1, steps: state.edition.id === 'lite' ? 4 : 8 };
   return { cfg: +k?.cfg || defaults.cfg, steps: +k?.steps || defaults.steps };
 }
@@ -252,9 +256,9 @@ function bindKnobs() {
   for (const p of ['edAi']) for (const key of ['Cfg', 'Steps']) {
     const el = document.getElementById(p + key);
     if (el) el.oninput = () => {
-      const k = load('arto.editKnobs', {});
+      const k = load(editKnobKey(), {});
       k[key.toLowerCase()] = +el.value;
-      try { localStorage.setItem('arto.editKnobs', JSON.stringify(k)); } catch {}
+      try { localStorage.setItem(editKnobKey(), JSON.stringify(k)); } catch {}
       sync();
     };
   }

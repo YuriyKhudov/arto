@@ -21,28 +21,43 @@
         "RealESRGAN_x2plus.pth"
       ],
       "edit": {
-        "kind": "qwen21",
-        "unet": "qwen_image_2.1_turbo_int8_convrot.safetensors",
-        "clip": "qwen3vl_8b_int8_convrot.safetensors",
-        "vae": "qwen_image_2.1_vae_bf16.safetensors",
-        "steps": 8,
+        "kind": "qwen2511",
+        "unet": "qwen_image_edit_2511_bf16.safetensors",
+        "dtype": "fp8_e4m3fn",
+        "clip": "qwen_2.5_vl_7b.safetensors",
+        "vae": "qwen_image_vae.safetensors",
+        "steps": 4,
         "cfg": 1,
-        "resolution": 1024,
+        "lightning": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-fp32.safetensors",
+        "photoLora": "edit_0928_lora_step40000.safetensors",
+        "shift": 3,
+        "sampler": "euler_ancestral",
+        "scheduler": "simple",
         "download": {
+          "lightning": [
+            "loras",
+            "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-fp32.safetensors",
+            "ускорение редактора Qwen"
+          ],
+          "photoLora": [
+            "loras",
+            "https://huggingface.co/DiffSynth-Studio/Qwen-Image-Edit-F2P/resolve/main/edit_0928_lora_step40000.safetensors",
+            "дополнение для фотореализма Qwen"
+          ],
           "unet": [
             "diffusion_models",
-            "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors",
-            "новый ИИ-редактор (6,8 ГБ)"
+            "https://huggingface.co/Comfy-Org/Qwen-Image-Edit/resolve/main/split_files/diffusion_models/qwen_image_edit_2511_bf16.safetensors",
+            "ИИ-редактор Qwen-Image-Edit 2511 (40,9 ГБ)"
           ],
           "clip": [
             "text_encoders",
-            "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors",
-            "понимание текста для редактора (8,7 ГБ)"
+            "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b.safetensors",
+            "понимание текста для редактора"
           ],
           "vae": [
             "vae",
-            "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors",
-            "VAE редактора (0,6 ГБ)"
+            "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors",
+            "VAE редактора"
           ]
         }
       },
@@ -57,20 +72,7 @@
       "control": {
         "union": "diffusion_pytorch_model_promax.safetensors"
       },
-      "retired": [
-        [
-          "diffusion_models",
-          "qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning_comfyui_4steps_v1.0.safetensors"
-        ],
-        [
-          "text_encoders",
-          "qwen_2.5_vl_7b_fp8_scaled.safetensors"
-        ],
-        [
-          "vae",
-          "qwen_image_vae.safetensors"
-        ]
-      ]
+      "retired": []
     },
     "lite": {
       "title": "Lite",

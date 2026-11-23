@@ -16,7 +16,7 @@ process.on('uncaughtException', (e) => { logError('Ошибка', e); process.ex
 process.on('unhandledRejection', (e) => logError('Ошибка (async)', e));
 
 const { STYLES, RETIRED, GUARDS, buildPrompts, parseInlineParams, dimsFor } = require('./prompt');
-const { Comfy, wfGenerate, wfUpscale, wfEdit, wfOutpaint, wfOutpaintUnion, wfTrainLora } = require('./comfy');
+const { Comfy, wfGenerate, wfUpscale, wfEdit, defaultEditLoras, wfOutpaint, wfOutpaintUnion, wfTrainLora } = require('./comfy');
 // библиотека картинок нужна только для сохранения фактуры — если её нет, остальное работает
 const texture = () => require('./texture');
 const facefix = () => require('./facefix');
@@ -40,7 +40,7 @@ const config = mergeCfg(readCfg(path.join(ROOT, 'atelier.config.json')), readCfg
 {
   const loc = readCfg(path.join(DATA, 'local.json'));
   const le = loc.editions?.[config.edition]?.edit;
-  if (le && /qwen_image_edit_2511/i.test(le.unet || '') && config.editions[config.edition]?.edit) {
+  if (le && /qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning|qwen_image_2\.1_turbo/i.test(le.unet || '') && config.editions[config.edition]?.edit) {
     const base = readCfg(path.join(ROOT, 'atelier.config.json')).editions[config.edition].edit;
     config.editions[config.edition].edit = base; // берём новый редактор из общих настроек
   }
@@ -347,7 +347,7 @@ function pngSize(buf) {
 }
 
 // Запустить ИИ-редактор на загруженных картинках. Pro — Qwen-Image-Edit, Lite — FLUX.2 klein.
-async function runEdit({ names, firstBuf, instruction, seed, prog, inpaint = null, cfg = null, steps = null }) {
+async function runEdit({ names, firstBuf, instruction, seed, prog, inpaint = null, cfg = null, steps = null, loras }) {
   if (modelsDl) throw new Error(`Arto докачивает ${modelsDl.what} — ${modelsDl.pct}%. Это один раз, подождите немного.`);
   const e = { ...edition.edit, ...(cfg ? { cfg } : {}), ...(steps ? { steps } : {}) };
   const opts = {
@@ -357,7 +357,8 @@ async function runEdit({ names, firstBuf, instruction, seed, prog, inpaint = nul
       unet: await model('diffusion_models', e.unet),
       clip: await model('text_encoders', e.clip),
       vae: await model('vae', e.vae),
-      lora: e.lora ? await model('loras', e.lora) : null,
+      loras: await Promise.all((loras ?? defaultEditLoras(e)).map(async ({ name, strength }) =>
+        ({ name: await model('loras', name), strength }))),
     },
   };
   if (e.kind === 'flux2') {
@@ -642,17 +643,17 @@ async function keepTexture(orig, edited, { retexture = false, prompt = '', negat
 }
 
 // Изменить по команде (аналог Nano Banana)
-function createEdit({ instruction, sources, count, from, isTemp, preserve = false, collage = false, quality = 'normal', cfg = null, steps = null }) {
+function createEdit({ instruction, sources, count, from, isTemp, preserve = false, collage = false, quality = 'normal', cfg = null, steps = null, loras, seed: requestedSeed }) {
   // Если CFG и Steps не переданы, используются настройки модели.
-  cfg = Number.isFinite(+cfg) && +cfg > 0 ? Math.max(1, Math.min(3, +cfg)) : null;
-  steps = Number.isFinite(+steps) && +steps > 0 ? Math.max(4, Math.min(20, Math.round(+steps))) : null;
+  cfg = Number.isFinite(+cfg) && +cfg > 0 ? Math.max(1, Math.min(10, +cfg)) : null;
+  steps = Number.isFinite(+steps) && +steps > 0 ? Math.max(4, Math.min(80, Math.round(+steps))) : null;
   if (!edition.edit) throw new Error('ИИ-редактор не настроен. Запустите install.bat ещё раз.');
   const n = Math.max(1, Math.min(4, +count || 1));
-  const seed = Math.floor(Math.random() * 2 ** 31);
+  const seed = requestedSeed ?? Math.floor(Math.random() * 2 ** 31);
   const job = baseJob('edit', {
     temp: !!isTemp,
     variation: from || null,
-    prompt: instruction, rawPrompt: instruction, params: { count: n, seed, preserve, quality: quality === 'draft' ? 'draft' : 'normal', cfg, steps },
+    prompt: instruction, rawPrompt: instruction, params: { count: n, seed, preserve, quality: quality === 'draft' ? 'draft' : 'normal', cfg, steps, loras },
     images: Array.from({ length: n }, (_, i) => ({ index: i, finalPrompt: instruction, seed: seed + i, file: null, error: null, liked: false })),
   });
   job.sources = sources.map((buf, i) => saveImage(`${job.id}_src${i}`, buf));
@@ -660,7 +661,7 @@ function createEdit({ instruction, sources, count, from, isTemp, preserve = fals
   let names = null;
   return startJob(job, async (img, prog) => {
     if (!names) names = await Promise.all(sources.map((buf, i) => comfy.upload(buf, `${job.id}_src${i}.${sniffExt(buf)}`)));
-    const out = await runEdit({ names, firstBuf: sources[0], instruction, seed: img.seed, prog, cfg, steps });
+    const out = await runEdit({ names, firstBuf: sources[0], instruction, seed: img.seed, prog, cfg, steps, loras });
     if (collage || !preserve || sources.length !== 1) return out;
     // ИИ-редактор рисует новое в своей манере (гладко, «наклейкой»): перерисовать изменённые места в технике оригинала
     // в подсказке — только техника: описание оригинала («платье в узор») вернуло бы старое на изменённое место
@@ -871,7 +872,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, {
         styles: STYLES.map(({ id, name, hint }) => ({ id, name, hint })),
         guards: GUARDS.map(({ id, name, hint }) => ({ id, name, hint })),
-        edition: { id: edition.id, title: edition.title, canEdit: !!edition.edit, editDefaults: edition.edit ? { cfg: edition.edit.cfg, steps: edition.edit.steps } : null },
+        edition: { id: edition.id, title: edition.title, canEdit: !!edition.edit, editKind: edition.edit?.kind, editKnobProfile: edition.edit?.lightning ? 'qwen2511-lightning' : edition.edit?.kind, editDefaults: edition.edit ? { cfg: edition.edit.cfg, steps: edition.edit.steps } : null, editSeed: true },
         version: updater.localVersion(),
         engine: { status: comfy.status, message: comfy.message, download: modelsDl },
         jobs: [...active.values()].filter((j) => !j.temp).reverse().concat(gallery),
@@ -887,7 +888,7 @@ const server = http.createServer(async (req, res) => {
       if (r.updated) restartSelf();
       return;
     }
-    // окно Arto сообщает «я здесь» и «меня закрыли» — когда окон не осталось, выключаем всё
+    // Когда окон нет и задания закончились, сервер Arto завершает работу.
     if (p === '/api/alive' && req.method === 'POST') { windows.set(String((await readBody(req)).id || '?'), Date.now()); windowSeen = true; return send(res, 200, { ok: true }); }
     if (p === '/api/bye' && req.method === 'POST') {
       const id = (await readRaw(req, 1024)).toString().trim();
@@ -943,11 +944,35 @@ const server = http.createServer(async (req, res) => {
       if (!src?.images[index]?.file) return send(res, 404, { error: 'Изображение не найдено' });
       return send(res, 200, createOutpaint(src, index, { mode, amount, ar }));
     }
+    if (p === '/api/edit/loras' && req.method === 'GET') {
+      const files = await comfy.listModels('loras');
+      const defaults = defaultEditLoras(edition.edit).map(({ name, strength }) => ({
+        name: files.find((file) => file === name || file.split(/[\\/]/).pop() === name) || '',
+        strength,
+      }));
+      return send(res, 200, { files, defaults });
+    }
     if (p === '/api/edit' && req.method === 'POST') {
       // источники: картинки из галереи {jobId,index} и/или загруженные (data URI), до 3 штук
       const body = await readBody(req);
       const instruction = String(body.instruction || '').trim();
       if (!instruction) return send(res, 400, { error: 'Напишите, что изменить' });
+      if (body.seed !== undefined && (!Number.isSafeInteger(body.seed) || body.seed < 0 || body.seed > Number.MAX_SAFE_INTEGER - 3)) {
+        return send(res, 400, { error: 'Seed должен быть целым числом от 0 до 9007199254740988.' });
+      }
+      let loras;
+      if (body.loras !== undefined) {
+        const selected = body.loras;
+        if (!Array.isArray(selected) || selected.length > 2 || selected.some((item) =>
+          typeof item?.name !== 'string' || !Number.isFinite(item.strength) || Math.abs(item.strength) > 2)) {
+          return send(res, 400, { error: 'Проверьте выбор LoRA и вес от −2 до 2.' });
+        }
+        loras = selected.filter(({ name, strength }) => name && strength !== 0);
+        if (loras.length) {
+          const files = await comfy.listModels('loras');
+          if (loras.some(({ name }) => !files.includes(name))) return send(res, 400, { error: 'Выбранная LoRA не найдена. Обновите список.' });
+        }
+      }
       const sources = [];
       for (const s of body.sources || []) {
         const buf = typeof s === 'string' ? dataUriToBuffer(s) : imageBuf(s.jobId, s.index);
@@ -956,7 +981,7 @@ const server = http.createServer(async (req, res) => {
       if (!sources.length) return send(res, 400, { error: 'Добавьте картинку, которую нужно изменить' });
       // from — откуда открыта картинка в редакторе: техника оригинала и что на нём изображено
       const from = body.sources?.[0]?.jobId ? body.sources[0] : body.from?.jobId && findJob(body.from.jobId) ? { jobId: body.from.jobId, index: +body.from.index || 0 } : null;
-      return send(res, 200, createEdit({ instruction, sources: sources.slice(0, 3), count: body.count, from, isTemp: !!body.temp, preserve: body.preserve === true, collage: body.collage === true, quality: body.quality, cfg: body.cfg, steps: body.steps }));
+      return send(res, 200, createEdit({ instruction, sources: sources.slice(0, 3), count: body.count, from, isTemp: !!body.temp, preserve: body.preserve === true, collage: body.collage === true, quality: body.quality, cfg: body.cfg, steps: body.steps, loras, seed: body.seed }));
     }
     if (p === '/api/save' && req.method === 'POST') {
       // результат из редактора → новая работа в ленте
@@ -1173,7 +1198,6 @@ const server = http.createServer(async (req, res) => {
 
 // Перезапуск после обновления: новый процесс сервера, старый завершается
 function restartSelf() {
-  restarting = true;
   setTimeout(() => {
     server.close();
     const { spawn } = require('child_process');
@@ -1182,7 +1206,7 @@ function restartSelf() {
   }, 500);
 }
 
-// ---------- закрыли окно Arto — выключаем всё: рисование, двигатель (ComfyUI), сервер ----------
+// ---------- закрыли окно Arto — дожидаемся заданий и выключаем сервер Arto ----------
 // Обновление страницы (F5) — тоже «закрытие», поэтому ждём BYE_GRACE: если окно вернулось, ничего не делаем.
 // Свёрнутое окно браузер «усыпляет» (сигнал раз в минуту), поэтому по тишине выключаем только через WINDOW_TIMEOUT.
 const windows = new Map(); // id окна → когда было на связи
@@ -1190,27 +1214,20 @@ const BYE_GRACE = 10000;
 const WINDOW_TIMEOUT = 3 * 60000;
 let windowSeen = false;
 function checkWindows() {
-  if (process.env.ARTO_KEEP || stopping) return;
+  if (process.env.ARTO_KEEP || stopping || active.size || modelsDl) return;
   const now = Date.now();
   for (const [id, t] of windows) if (now - t > WINDOW_TIMEOUT) windows.delete(id);
   // окон не осталось (а хотя бы одно было — иначе это запуск без окна) → выключаем
-  if (!windows.size && windowSeen) shutdownAll();
+  if (!windows.size && windowSeen) shutdownArto();
 }
 setInterval(checkWindows, 30000).unref();
 let stopping = false;
 
-function shutdownAll() {
+function shutdownArto() {
   if (stopping) return;
   stopping = true;
-  restarting = true; // двигатель гасим сами, обработчик 'exit' не нужен
-  setTimeout(async () => {
-    console.log('Выключаю Arto…');
-    for (const job of active.values()) job.cancelled = true;
-    if (running) await comfy.interrupt();
-    server.close();
-    comfy.shutdown();
-    process.exit(0);
-  }, 300);
+  console.log('Выключаю Arto…');
+  server.close(() => process.exit(0));
 }
 
 server.on('error', (e) => {
@@ -1221,6 +1238,4 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`\n  Arto ${edition.title}:  http://localhost:${PORT}\n  Работы сохраняются в: ${IMAGES}\n`);
 });
 
-for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => { restarting = true; comfy.shutdown(); process.exit(0); });
-process.on('exit', () => { if (!restarting) comfy.stop(); });
-let restarting = false;
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => process.exit(0));

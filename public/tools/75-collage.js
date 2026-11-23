@@ -161,10 +161,10 @@
           <summary>Настройки ИИ</summary>
           <p class="ed-hint" id="collageModel"></p>
           <label class="ed-field"><span>CFG <b id="collageStrengthValue">1</b></span>
-            <input id="collageStrength" type="range" min="1" max="3" step="0.25" value="1">
+            <input id="collageStrength" type="range" min="1" max="10" step="0.25" value="1">
           </label>
           <label class="ed-field"><span>Steps <b id="collageStepsValue"></b></span>
-            <input id="collageSteps" type="range" min="4" max="20" step="1">
+            <input id="collageSteps" type="range" min="4" max="80" step="1">
           </label>
         </details>
         <div class="ed-row">
@@ -179,7 +179,7 @@
       const canEdit = !!window.ATELIER?.canEdit;
       get('InstructionField').hidden = get('Settings').hidden = draw.hidden = !canEdit;
       const lite = window.ATELIER?.edition === 'lite';
-      get('Model').textContent = lite ? 'Модель Lite · FLUX.2 Klein' : 'Модель Pro · Qwen-Image 2.1';
+      get('Model').textContent = lite ? 'Модель Lite · FLUX.2 Klein' : (window.ATELIER?.editKind === 'qwen2511' ? 'Модель Pro · Qwen-Image-Edit 2511' : 'Модель Pro · Qwen-Image 2.1');
       get('Strength').value = window.ATELIER?.editDefaults?.cfg ?? 1;
       get('Steps').value = window.ATELIER?.editDefaults?.steps ?? (lite ? 4 : 8);
       for (const name of ['Strength', 'Steps']) {
