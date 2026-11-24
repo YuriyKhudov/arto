@@ -111,9 +111,7 @@ async function init() {
 }
 
 async function tick() {
-  if (state.engine.status !== 'ready' || state.engine.download) {
-    try { state.engine = await api('/api/engine'); renderEngine(); } catch {}
-  }
+  try { state.engine = await api('/api/engine'); renderEngine(); } catch {}
   const running = state.jobs.filter((j) => j.status === 'running');
   for (const j of running) {
     try {
@@ -136,10 +134,10 @@ async function tick() {
 function renderEngine() {
   const e = state.engine;
   const el = $('#engine');
-  el.className = 'engine ' + e.status;
-  el.title = e.message;
+  el.className = 'engine ' + (e.downloadError ? 'error' : e.status);
+  el.title = e.downloadError || e.message;
   const dl = e.download ? `Докачиваю ${e.download.what}: ${e.download.pct}%` : '';
-  $('span', el).innerHTML = `<b>Arto ${esc(state.edition.title)} <em>${esc(state.version || '')}</em></b>${esc(dl || (e.status === 'ready' ? 'Готов к работе' : e.message))}`;
+  $('span', el).innerHTML = `<b>Arto ${esc(state.edition.title)} <em>${esc(state.version || '')}</em></b>${esc(e.downloadError || dl || (e.status === 'ready' ? 'Готов к работе' : e.message))}`;
 }
 
 // ---------------- обновления ----------------

@@ -4,6 +4,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { pipeline } = require('stream/promises');
 
 // Журнал ошибок запуска: data/server.log — его можно просто переслать при проблемах
 const LOG_FILE = path.join(__dirname, 'data', 'server.log');
@@ -349,6 +350,7 @@ function pngSize(buf) {
 // Запустить ИИ-редактор на загруженных картинках. Pro — Qwen-Image-Edit, Lite — FLUX.2 klein.
 async function runEdit({ names, firstBuf, instruction, seed, prog, inpaint = null, cfg = null, steps = null, loras }) {
   if (modelsDl) throw new Error(`Arto докачивает ${modelsDl.what} — ${modelsDl.pct}%. Это один раз, подождите немного.`);
+  if (modelsDlError) throw new Error(modelsDlError);
   const e = { ...edition.edit, ...(cfg ? { cfg } : {}), ...(steps ? { steps } : {}) };
   const opts = {
     images: names, instruction, seed, inpaint,
@@ -528,43 +530,84 @@ function createOutpaint(src, index, { mode = 'wide', amount = 0.4, ar = null } =
 // ---------- новые модели после обновления: докачать, а старые (скачанные Arto) — удалить ----------
 // Чтобы у тех, кто обновляется, не нужно было запускать install.bat, и не копились лишние гигабайты.
 let modelsDl = null; // { what, pct } — пока качаем
+let modelsDlError = null;
 function findModelFile(folder, name, depth = 3) {
   const walk = (dir, d) => {
     let list = [];
     try { list = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
-    for (const x of list) if (x.isFile() && x.name === name) return path.join(dir, x.name);
+    for (const x of list) if (x.isFile() && x.name.toLowerCase() === name.toLowerCase()) return path.join(dir, x.name);
     if (d > 0) for (const x of list) if (x.isDirectory()) { const f = walk(path.join(dir, x.name), d - 1); if (f) return f; }
     return null;
   };
   return walk(path.join(config.comfy.path, 'ComfyUI', 'models', folder), depth);
 }
+
+async function downloadModel(url, dst, progress) {
+  const part = dst + '.part';
+  const have = fs.statSync(part, { throwIfNoEntry: false })?.size ?? 0;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 90000);
+  const request = (headers) => fetch(url, { headers, signal: controller.signal });
+  try {
+    let response = await request(have ? { Range: `bytes=${have}-` } : {});
+    const start = response.status === 206
+      ? /^bytes (\d+)-(\d+)\/(\d+)$/i.exec(response.headers.get('content-range') || '')
+      : null;
+    const resume = !!(have && start && Number(start[1]) === have && Number(start[2]) + 1 === Number(start[3]));
+    if (have && (response.status === 416 || (response.status === 206 && !resume))) {
+      await response.body?.cancel();
+      response = await request({});
+    }
+    if ((!resume && response.status !== 200) || !response.body) {
+      await response.body?.cancel();
+      throw new Error('HTTP ' + response.status);
+    }
+    const total = resume ? Number(start[3]) : Number(response.headers.get('content-length'));
+    let received = resume ? have : 0;
+    const count = async function* (chunks) {
+      for await (const chunk of chunks) {
+        timeout.refresh();
+        received += chunk.length;
+        if (total) progress.pct = Math.min(99, Math.floor(received / total * 100));
+        yield chunk;
+      }
+    };
+    timeout.refresh();
+    await pipeline(response.body, count, fs.createWriteStream(part, { flags: resume ? 'a' : 'w' }), { signal: controller.signal });
+    if (!received || (total && received !== total)) throw new Error('Скачался неполный файл');
+    fs.renameSync(part, dst);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function updateModels() {
   const e = edition.edit;
   if (!e?.download || !config.comfy.path) return;
   for (const [key, [folder, url, what]] of Object.entries(e.download)) {
     if (findModelFile(folder, e[key])) continue;
     const dst = path.join(config.comfy.path, 'ComfyUI', 'models', folder, 'atelier', e[key]);
-    fs.mkdirSync(path.dirname(dst), { recursive: true });
     modelsDl = { what, pct: 0 };
     console.log('Докачиваю ' + what + '…');
-    try {
-      const have = fs.existsSync(dst + '.part') ? fs.statSync(dst + '.part').size : 0; // продолжить с того же места
-      const r = await fetch(url, { headers: have ? { Range: `bytes=${have}-` } : {} });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const total = have + +(r.headers.get('content-length') || 0);
-      const out = fs.createWriteStream(dst + '.part', { flags: have && r.status === 206 ? 'a' : 'w' });
-      let got = r.status === 206 ? have : 0;
-      for await (const chunk of r.body) {
-        got += chunk.length;
-        if (!out.write(chunk)) await new Promise((ok) => out.once('drain', ok));
-        if (total) modelsDl.pct = Math.floor((got / total) * 100);
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        fs.mkdirSync(path.dirname(dst), { recursive: true });
+        await downloadModel(url, dst, modelsDl);
+        break;
+      } catch (err) {
+        logError('Докачка ' + what, err);
+        const diskError = ['ENOSPC', 'EACCES', 'EPERM'].includes(err.code);
+        if (!diskError && attempt < 3) {
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+          continue;
+        }
+        const advice = err.code === 'ENOSPC' ? 'Освободите место на диске.'
+          : diskError ? 'Проверьте доступ к папке моделей.'
+          : 'Проверьте, открывается ли Hugging Face на этом ПК.';
+        modelsDlError = `Не удалось скачать: ${what}. ${advice} Затем перезапустите Arto.`;
+        modelsDl = null;
+        return;
       }
-      await new Promise((ok) => out.end(ok));
-      fs.renameSync(dst + '.part', dst);
-    } catch (err) {
-      logError('Докачка ' + what, err);
-      modelsDl = null;
-      return; // без интернета — попробуем при следующем запуске; старый редактор пока не трогаем
     }
   }
   modelsDl = null;
@@ -874,7 +917,7 @@ const server = http.createServer(async (req, res) => {
         guards: GUARDS.map(({ id, name, hint }) => ({ id, name, hint })),
         edition: { id: edition.id, title: edition.title, canEdit: !!edition.edit, editKind: edition.edit?.kind, editKnobProfile: edition.edit?.lightning ? 'qwen2511-lightning' : edition.edit?.kind, editDefaults: edition.edit ? { cfg: edition.edit.cfg, steps: edition.edit.steps } : null, editSeed: true },
         version: updater.localVersion(),
-        engine: { status: comfy.status, message: comfy.message, download: modelsDl },
+        engine: { status: comfy.status, message: comfy.message, download: modelsDl, downloadError: modelsDlError },
         jobs: [...active.values()].filter((j) => !j.temp).reverse().concat(gallery),
       });
     }
@@ -896,7 +939,7 @@ const server = http.createServer(async (req, res) => {
       setTimeout(checkWindows, BYE_GRACE);
       return send(res, 200, { ok: true });
     }
-    if (p === '/api/engine') return send(res, 200, { status: comfy.status, message: comfy.message, queue: active.size, download: modelsDl });
+    if (p === '/api/engine') return send(res, 200, { status: comfy.status, message: comfy.message, queue: active.size, download: modelsDl, downloadError: modelsDlError });
     if (p === '/api/tools' && req.method === 'GET') {
       // Подключаемые инструменты редактора: каждый файл в public/tools/ — отдельный инструмент
       const files = fs.readdirSync(path.join(PUBLIC, 'tools')).filter((f) => f.endsWith('.js')).sort();
